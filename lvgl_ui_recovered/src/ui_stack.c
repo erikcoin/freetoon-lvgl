@@ -1,0 +1,87 @@
+/*
+ * Screen stack for navigation + idle controller for auto-dim.
+ *
+ * Screens cache themselves: each screen_*_create returns the same lv_obj
+ * on repeat calls, so push/pop is cheap and state survives navigation.
+ *
+ * Idle behavior: ui_mark_activity() records lv_tick_get(); ui_idle_tick()
+ * is polled from the main loop and, after settings.auto_dim_seconds of no
+ * activity, pushes the dim screen and lowers the backlight.
+ */
+#include "screens.h"
+#include "settings.h"
+#include "backlight.h"
+#include <stdio.h>
+
+#define STACK_MAX 8
+static lv_obj_t * stack[STACK_MAX];
+static int sp = 0;
+
+static uint32_t last_activity_ms = 0;
+static int      is_dimmed = 0;
+
+void ui_push(lv_obj_t * scr) {
+    if (sp >= STACK_MAX || !scr) return;
+    stack[sp++] = scr;
+    lv_scr_load(scr);
+}
+
+void ui_pop(void) {
+    if (sp <= 1) return;
+    sp--;
+    lv_scr_load(stack[sp - 1]);
+}
+
+static volatile int wake_pending = 0;
+
+void ui_mark_activity(void) {
+    last_activity_ms = lv_tick_get();
+    /* Any touch while dimmed queues a wake. The actual pop+lv_scr_load
+       runs from ui_idle_tick (main-loop context) so we never mutate the
+       screen stack from inside an LVGL event dispatch. */
+    if (is_dimmed) wake_pending = 1;
+}
+
+void ui_wake_now(void) {
+    wake_pending = 1;
+}
+
+void ui_idle_tick(void) {
+    /* Process any queued wake first so a touch immediately undims, even
+       if the on-screen click handler couldn't run for some reason. */
+    if (wake_pending && is_dimmed) {
+        fprintf(stderr, "[ui] waking from dim\n");
+        ui_pop();
+        is_dimmed = 0;
+        backlight_set(settings.active_brightness);
+        last_activity_ms = lv_tick_get();
+        wake_pending = 0;
+        /* Tell the indev to ignore any lingering touch state so the wake
+           tap does not bleed through onto a tile that's now visible. */
+        lv_indev_t * id = lv_indev_get_next(NULL);
+        while (id) {
+            lv_indev_wait_release(id);
+            id = lv_indev_get_next(id);
+        }
+        return;
+    }
+    wake_pending = 0;
+
+    if (!settings.auto_dim_enabled) return;
+    uint32_t now = lv_tick_get();
+    uint32_t elapsed_ms = now - last_activity_ms;
+    uint32_t threshold = (uint32_t)settings.auto_dim_seconds * 1000u;
+    if (!is_dimmed && elapsed_ms >= threshold) {
+        fprintf(stderr, "[ui] dimming after %u ms idle\n", elapsed_ms);
+        backlight_set(settings.dim_brightness);
+        ui_push(screen_dim_create());
+        is_dimmed = 1;
+    }
+}
+
+void ui_init(void) {
+    lv_obj_t * home = screen_home_create();
+    ui_push(home);
+    ui_mark_activity();
+    backlight_set(settings.active_brightness);
+}

@@ -1,0 +1,21 @@
+# build artefacts
+build/
+*.o
+*.d
+*.a
+*.so
+
+# cross-compiled ARM binaries (rebuild via make / build_*.sh on host)
+quby_bridge/quby_bridge
+quby_bridge/qubytap
+p1bridge/p1bridge
+
+# vendor toolchain & blobs (kept out of git — huge, downloadable elsewhere)
+linaro/
+*.tar.xz
+*.tar.gz
+
+# misc
+*.swp
+*~
+.DS_Store

@@ -1,0 +1,320 @@
+/*
+ * Thermostat detail screen — full-screen room temperature view with
+ * setpoint adjustment. Reachable from the home tile.
+ */
+#include "screens.h"
+#include "boxtalk.h"
+#include "homewizard.h"
+#include "icons.h"
+#include "settings.h"
+#include <stdio.h>
+#include <time.h>
+
+static lv_obj_t * scr_root = NULL;
+static lv_obj_t * lbl_temp;
+static lv_obj_t * lbl_humidity;
+static lv_obj_t * lbl_voc;
+static lv_obj_t * lbl_water;
+static lv_obj_t * lbl_setpoint;
+static lv_obj_t * lbl_conn;
+static lv_obj_t * lbl_burner;
+static lv_obj_t * lbl_ch_hdr;
+static lv_obj_t * lbl_flow;
+static lv_obj_t * lbl_return;
+static lv_obj_t * img_flame;
+static lv_obj_t * img_faucet;
+static lv_obj_t * img_drop;
+static lv_obj_t * lbl_clock;
+static lv_obj_t * lbl_date;
+static lv_timer_t * refresh_timer = NULL;
+
+static void on_open_advanced(lv_event_t * e) { (void)e; ui_push(screen_heater_advanced_create()); }
+static void on_setpoint_up(lv_event_t * e) { boxtalk_setpoint_increase(); }
+static void on_setpoint_down(lv_event_t * e) { boxtalk_setpoint_decrease(); }
+static void on_back(lv_event_t * e) { ui_pop(); }
+static void on_open_schedule(lv_event_t * e) { (void)e; ui_push(screen_schedule_create()); }
+
+static void refresh_cb(lv_timer_t * t) {
+    (void)t;
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    char clk[16];
+    strftime(clk, sizeof(clk), "%H:%M", &tm);
+    lv_label_set_text(lbl_clock, clk);
+    char dt[48];
+    strftime(dt, sizeof(dt), "%A %d %B %Y", &tm);
+    lv_label_set_text(lbl_date, dt);
+
+    if (toon_state.connected) {
+        lv_label_set_text_fmt(lbl_conn, "BoxTalk OK  msg=%d", toon_state.msg_count);
+        lv_obj_set_style_text_color(lbl_conn, lv_color_hex(0x66cc88), 0);
+    } else {
+        lv_label_set_text(lbl_conn, "BoxTalk: connecting...");
+        lv_obj_set_style_text_color(lbl_conn, lv_color_hex(0xff8866), 0);
+    }
+
+    if (toon_state.indoor_temp > 0)
+        lv_label_set_text_fmt(lbl_temp, "%.1f C", display_indoor_temp(toon_state.indoor_temp));
+    if (toon_state.humidity > 0)
+        lv_label_set_text_fmt(lbl_humidity, "RH %.0f%%", toon_state.humidity);
+    if (toon_state.eco2 || toon_state.tvoc)
+        lv_label_set_text_fmt(lbl_voc, "eCO2 %d ppm", toon_state.eco2);
+
+    if (hw_state.connected_water) {
+        if (hw_state.water_lpm > 0.05f)
+            lv_label_set_text_fmt(lbl_water, "%.2f m3  /  %.1f L/min",
+                                  hw_state.water_total_m3, hw_state.water_lpm);
+        else
+            lv_label_set_text_fmt(lbl_water, "%.2f m3",
+                                  hw_state.water_total_m3);
+    } else {
+        lv_label_set_text(lbl_water, "Water -- m3");
+    }
+    if (toon_state.setpoint > 0)
+        lv_label_set_text_fmt(lbl_setpoint, "Setpoint: %.1f C", toon_state.setpoint);
+
+    /* For the "flow" reading prefer boiler_out_temp — that's the freshest
+     * OTGW CurrentBoilerTemperature coming through the bridge. The
+     * TemperatureSensor-based boiler_temp from happ_thermstat lags by tens
+     * of seconds while ramping, which made the label disagree with the
+     * "CH water Flow" panel on the right. */
+    float flow_t = (toon_state.boiler_out_temp > 0)
+                       ? toon_state.boiler_out_temp
+                       : toon_state.boiler_temp;
+    if (toon_state.burner_on) {
+        /* "Heating  → 90 C  (flow 65 C)" — the arrow target is the boiler
+         * water setpoint happ_thermstat is asking for, the parens value is
+         * the actual flow temp coming back. */
+        if (toon_state.ch_setpoint > 0)
+            lv_label_set_text_fmt(lbl_burner,
+                "Heating  -> %.0f C  (flow %.1f C)",
+                toon_state.ch_setpoint, flow_t);
+        else
+            lv_label_set_text_fmt(lbl_burner, "Heating  (flow %.1f C)",
+                                  flow_t);
+        lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0xff6644), 0);
+        lv_obj_clear_flag(img_flame,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
+    } else if (toon_state.dhw_on) {
+        lv_label_set_text_fmt(lbl_burner, "Hot water  (flow %.1f C)", flow_t);
+        lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0x44aaff), 0);
+        lv_obj_add_flag(img_flame, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
+    } else if (flow_t > 0) {
+        lv_label_set_text_fmt(lbl_burner, "Boiler idle  (flow %.1f C)", flow_t);
+        lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0x88aabb), 0);
+        lv_obj_add_flag(img_flame,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text(lbl_burner, "Boiler idle");
+        lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0x88aabb), 0);
+        lv_obj_add_flag(img_flame,  LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* CH water inlet/outlet temps. Flow falls back to the boiler
+       TemperatureSensor (always present) if the boilerTemps query hasn't
+       answered; return comes only from the boilerRetTemps query. */
+    float flow = toon_state.boiler_out_temp > 0 ? toon_state.boiler_out_temp
+                                                : toon_state.boiler_temp;
+    if (flow > 0) lv_label_set_text_fmt(lbl_flow, "Flow  %.1f C", flow);
+    else          lv_label_set_text(lbl_flow, "Flow  -- C");
+    if (toon_state.boiler_in_temp > 0)
+        lv_label_set_text_fmt(lbl_return, "Return  %.1f C", toon_state.boiler_in_temp);
+    else
+        lv_label_set_text(lbl_return, "Return  -- C");
+
+    /* Force a full screen invalidate to defeat any partial-flush quirk. */
+    lv_obj_invalidate(scr_root);
+}
+
+lv_obj_t * screen_thermostat_create(void) {
+    if (scr_root) return scr_root;  /* cached */
+
+    scr_root = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(scr_root, lv_color_hex(0x0f1a2a), 0);
+    lv_obj_clear_flag(scr_root, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Back button — generous hit area (140x96) plus extended ext_click_area
+       so even sloppy taps near the corner register. */
+    lv_obj_t * btn_back = lv_btn_create(scr_root);
+    lv_obj_set_size(btn_back, 140, 96);
+    lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 12, 12);
+    lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x223344), 0);
+    lv_obj_set_style_radius(btn_back, 14, 0);
+    lv_obj_set_ext_click_area(btn_back, 20);
+    lv_obj_add_event_cb(btn_back, on_back, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * btn_back_lbl = lv_label_create(btn_back);
+    lv_label_set_text(btn_back_lbl, "< Back");
+    lv_obj_set_style_text_color(btn_back_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(btn_back_lbl, &lv_font_montserrat_22, 0);
+    lv_obj_center(btn_back_lbl);
+
+    /* Clock + date */
+    lbl_clock = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_clock, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lbl_clock, &lv_font_montserrat_28, 0);
+    lv_obj_align(lbl_clock, LV_ALIGN_TOP_LEFT, 180, 25);
+    lv_label_set_text(lbl_clock, "--:--");
+
+    lbl_date = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_date, lv_color_hex(0x88aabb), 0);
+    lv_obj_set_style_text_font(lbl_date, &lv_font_montserrat_18, 0);
+    lv_obj_align_to(lbl_date, lbl_clock, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
+
+    /* Schedule button (top-right) */
+    lv_obj_t * btn_sched = lv_btn_create(scr_root);
+    lv_obj_set_size(btn_sched, 180, 70);
+    lv_obj_align(btn_sched, LV_ALIGN_TOP_RIGHT, -12, 12);
+    lv_obj_set_style_bg_color(btn_sched, lv_color_hex(0x335577), 0);
+    lv_obj_set_style_radius(btn_sched, 12, 0);
+    lv_obj_set_ext_click_area(btn_sched, 16);
+    lv_obj_add_event_cb(btn_sched, on_open_schedule, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * sched_lbl = lv_label_create(btn_sched);
+    lv_label_set_text(sched_lbl, "Schedule");
+    lv_obj_set_style_text_color(sched_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(sched_lbl, &lv_font_montserrat_22, 0);
+    lv_obj_center(sched_lbl);
+
+    /* Connection indicator just under the Schedule button */
+    lbl_conn = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_conn, lv_color_hex(0xff8866), 0);
+    lv_obj_set_style_text_font(lbl_conn, &lv_font_montserrat_18, 0);
+    lv_obj_align(lbl_conn, LV_ALIGN_TOP_RIGHT, -20, 95);
+    lv_label_set_text(lbl_conn, "BoxTalk: connecting...");
+
+    /* Big indoor temp */
+    lbl_temp = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_temp, lv_color_hex(0xffcc44), 0);
+    lv_obj_set_style_text_font(lbl_temp, &lv_font_montserrat_48, 0);
+    lv_obj_align(lbl_temp, LV_ALIGN_CENTER, 0, -80);
+    lv_label_set_text(lbl_temp, "-- C");
+
+    /* Environment readings live in the left column just above the
+       setpoint row, where "Boiler idle" used to sit. Boiler state has
+       moved further up. */
+    lbl_humidity = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_humidity, lv_color_hex(0x88aabb), 0);
+    lv_obj_set_style_text_font(lbl_humidity, &lv_font_montserrat_22, 0);
+    lv_obj_align(lbl_humidity, LV_ALIGN_BOTTOM_LEFT, 30, -260);
+    lv_label_set_text(lbl_humidity, "RH --%");
+
+    lbl_voc = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_voc, lv_color_hex(0x88aabb), 0);
+    lv_obj_set_style_text_font(lbl_voc, &lv_font_montserrat_22, 0);
+    lv_obj_align(lbl_voc, LV_ALIGN_BOTTOM_LEFT, 30, -225);
+    lv_label_set_text(lbl_voc, "eCO2 -- ppm");
+
+    lbl_water = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_water, lv_color_hex(0x66aaff), 0);
+    lv_obj_set_style_text_font(lbl_water, &lv_font_montserrat_22, 0);
+    lv_obj_align(lbl_water, LV_ALIGN_BOTTOM_LEFT, 30, -190);
+    lv_label_set_text(lbl_water, "Water -- m3");
+
+    /* Setpoint row with +/- buttons. Wider than before so "Setpoint: NN.N C"
+       has breathing room between the two buttons. */
+    lv_obj_t * sp_row = lv_obj_create(scr_root);
+    lv_obj_set_size(sp_row, 760, 130);
+    lv_obj_align(sp_row, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_obj_set_style_bg_color(sp_row, lv_color_hex(0x1a2a44), 0);
+    lv_obj_set_style_border_width(sp_row, 0, 0);
+    lv_obj_set_style_radius(sp_row, 14, 0);
+    lv_obj_clear_flag(sp_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t * btn_dn = lv_btn_create(sp_row);
+    lv_obj_set_size(btn_dn, 110, 100);
+    lv_obj_align(btn_dn, LV_ALIGN_LEFT_MID, 5, 0);
+    lv_obj_set_style_bg_color(btn_dn, lv_color_hex(0x335577), 0);
+    lv_obj_add_event_cb(btn_dn, on_setpoint_down, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * btn_dn_lbl = lv_label_create(btn_dn);
+    lv_label_set_text(btn_dn_lbl, "-");
+    lv_obj_set_style_text_font(btn_dn_lbl, &lv_font_montserrat_48, 0);
+    lv_obj_center(btn_dn_lbl);
+
+    lbl_setpoint = lv_label_create(sp_row);
+    lv_obj_set_style_text_color(lbl_setpoint, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lbl_setpoint, &lv_font_montserrat_48, 0);
+    lv_obj_align(lbl_setpoint, LV_ALIGN_CENTER, 0, -8);
+    lv_label_set_text(lbl_setpoint, "Setpoint: --");
+
+    lv_obj_t * btn_up = lv_btn_create(sp_row);
+    lv_obj_set_size(btn_up, 110, 100);
+    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -5, 0);
+    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x335577), 0);
+    lv_obj_add_event_cb(btn_up, on_setpoint_up, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * btn_up_lbl = lv_label_create(btn_up);
+    lv_label_set_text(btn_up_lbl, "+");
+    lv_obj_set_style_text_font(btn_up_lbl, &lv_font_montserrat_48, 0);
+    lv_obj_center(btn_up_lbl);
+
+    /* Boiler state — icons + text. Icons live at left; text label sits
+       to their right and is the only thing that ever fills its area. */
+    img_flame = lv_img_create(scr_root);
+    lv_img_set_src(img_flame, &icon_flame);
+    lv_obj_set_style_img_recolor(img_flame, lv_color_hex(0xff6644), 0);
+    lv_obj_set_style_img_recolor_opa(img_flame, 255, 0);
+    lv_obj_align(img_flame, LV_ALIGN_BOTTOM_LEFT, 30, -340);
+    lv_obj_add_flag(img_flame, LV_OBJ_FLAG_HIDDEN);
+
+    img_faucet = lv_img_create(scr_root);
+    lv_img_set_src(img_faucet, &icon_faucet);
+    lv_obj_set_style_img_recolor(img_faucet, lv_color_hex(0xcccccc), 0);
+    lv_obj_set_style_img_recolor_opa(img_faucet, 255, 0);
+    lv_obj_align(img_faucet, LV_ALIGN_BOTTOM_LEFT, 26, -344);
+    lv_obj_add_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
+
+    /* Red drop overlapping the faucet spout */
+    img_drop = lv_img_create(scr_root);
+    lv_img_set_src(img_drop, &icon_drop);
+    lv_obj_set_style_img_recolor(img_drop, lv_color_hex(0xff3333), 0);
+    lv_obj_set_style_img_recolor_opa(img_drop, 255, 0);
+    lv_obj_align(img_drop, LV_ALIGN_BOTTOM_LEFT, 48, -320);
+    lv_obj_add_flag(img_drop, LV_OBJ_FLAG_HIDDEN);
+
+    lbl_burner = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0x88aabb), 0);
+    lv_obj_set_style_text_font(lbl_burner, &lv_font_montserrat_22, 0);
+    lv_obj_align(lbl_burner, LV_ALIGN_BOTTOM_LEFT, 90, -325);
+    lv_label_set_text(lbl_burner, "Boiler idle");
+
+    /* CH water inlet/outlet block — right side, above the setpoint row.
+       Outlet = flow temp (CurrentBoilerTemperature),
+       inlet  = return temp (CurrentBoilerReturnTemperature). */
+    lbl_ch_hdr = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_ch_hdr, lv_color_hex(0x6688aa), 0);
+    lv_obj_set_style_text_font(lbl_ch_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_align(lbl_ch_hdr, LV_ALIGN_BOTTOM_RIGHT, -40, -250);
+    lv_label_set_text(lbl_ch_hdr, "CH water");
+
+    lbl_flow = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_flow, lv_color_hex(0xff8866), 0);
+    lv_obj_set_style_text_font(lbl_flow, &lv_font_montserrat_22, 0);
+    lv_obj_align(lbl_flow, LV_ALIGN_BOTTOM_RIGHT, -40, -220);
+    lv_label_set_text(lbl_flow, "Flow  -- C");
+
+    lbl_return = lv_label_create(scr_root);
+    lv_obj_set_style_text_color(lbl_return, lv_color_hex(0x66aaff), 0);
+    lv_obj_set_style_text_font(lbl_return, &lv_font_montserrat_22, 0);
+    lv_obj_align(lbl_return, LV_ALIGN_BOTTOM_RIGHT, -40, -192);
+    lv_label_set_text(lbl_return, "Return  -- C");
+
+    /* "Advanced" button — pushes OTGW raw-DID list. */
+    lv_obj_t * adv = lv_btn_create(scr_root);
+    lv_obj_set_size(adv, 140, 44);
+    lv_obj_align(adv, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
+    lv_obj_set_style_bg_color(adv, lv_color_hex(0x444444), 0);
+    lv_obj_add_event_cb(adv, on_open_advanced, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * advl = lv_label_create(adv);
+    lv_obj_set_style_text_color(advl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(advl, &lv_font_montserrat_18, 0);
+    lv_label_set_text(advl, "Advanced");
+    lv_obj_center(advl);
+
+    if (!refresh_timer) refresh_timer = lv_timer_create(refresh_cb, 500, NULL);
+    return scr_root;
+}
