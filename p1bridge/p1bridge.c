@@ -188,9 +188,27 @@ static int bxt_set_rrd_binding(const char *series_uuid, const char *pub_uuid) {
 }
 
 /* hcb_rrd subdevice UUIDs for the meter series — pulled from hcb_rrd's
-   own discovery announcement. */
-#define RRD_ELEC_FLOW_UUID "49869aaf-cbf4-40a9-9e6d-8f7ae3f5d536"
-#define RRD_GAS_FLOW_UUID  "5c743a5b-95e5-4a00-a72d-5fbddf2e4199"
+   own discovery announcement / .dat file inspection. */
+#define RRD_ELEC_FLOW_UUID    "49869aaf-cbf4-40a9-9e6d-8f7ae3f5d536"
+#define RRD_GAS_FLOW_UUID     "5c743a5b-95e5-4a00-a72d-5fbddf2e4199"
+/* Cumulative meter readings — bound to "placeholder" or to Eneco-internal
+ * UUIDs out of the box, so happ_pwrmtr (which doesn't run on a stock
+ * post-cloud Toon) was the only writer. Re-binding to our publisher
+ * UUIDs lets p1bridge fill the *_quantity_* archives that feed the
+ * stats page's week/month/year tabs.
+ *
+ * Multiple ElectricityQuantityMeter rows exist — one per RRA bucket
+ * size and tariff. We rebind ALL the placeholder-bound ones so the
+ * 5min-week, 5yrhours and 10yrdays archives all get fed from the same
+ * notify. The chart sums nt+lt for display, so publishing the total
+ * to just nt (with lt staying 0) renders correctly without needing a
+ * separate tariff split. */
+#define RRD_ELEC_QTY_5YR_UUID       "657ccec4-4c7b-42e3-ae6d-4d4d880045c7"
+#define RRD_ELEC_QTY_5YR_ALT_UUID   "095f63f6-8877-40dd-ae93-66904e5f77ac"
+#define RRD_ELEC_QTY_5YR_ALT2_UUID  "1507acc2-2dc0-4565-a0ee-38ebeba81054"
+#define RRD_GAS_QTY_5YR_UUID        "07b90980-c1ba-4801-88b0-75a3f7deaa32"
+#define RRD_GAS_QTY_WEEK_UUID       "0e884c48-f425-4be9-a290-e6ab671c55d1"
+#define RRD_WATER_QTY_UUID          "d598ceb1-ad11-466b-a4c8-0594a877c1ea"
 
 static int bxt_handshake(void) {
     long now = (long)time(NULL); int pid = (int)getpid();
@@ -270,7 +288,17 @@ static int bxt_ensure(void) {
        so no rebind needed there. Safe to call on every reconnect. */
     bxt_set_rrd_binding(RRD_ELEC_FLOW_UUID, UUID_ELEC);
     bxt_set_rrd_binding(RRD_GAS_FLOW_UUID,  UUID_GAS);
-    logmsg("BoxTalk connected + handshaken + bindings refreshed");
+    /* Cumulative meter loggers — same trick. Feeds the stats page's
+       week/month/year tabs which were stuck on "no data" because the
+       Eneco daemons that originally wrote here aren't running on a
+       post-cloud Toon. */
+    bxt_set_rrd_binding(RRD_ELEC_QTY_5YR_UUID,      UUID_ELEC);
+    bxt_set_rrd_binding(RRD_ELEC_QTY_5YR_ALT_UUID,  UUID_ELEC);
+    bxt_set_rrd_binding(RRD_ELEC_QTY_5YR_ALT2_UUID, UUID_ELEC);
+    bxt_set_rrd_binding(RRD_GAS_QTY_5YR_UUID,       UUID_GAS);
+    bxt_set_rrd_binding(RRD_GAS_QTY_WEEK_UUID,      UUID_GAS);
+    bxt_set_rrd_binding(RRD_WATER_QTY_UUID,         UUID_WATER);
+    logmsg("BoxTalk connected + handshaken + bindings (flow + qty) refreshed");
     return 0;
 }
 
@@ -336,8 +364,17 @@ static void water_tick(void) {
     if (http_get_v1(HWE_WTR_HOST, "/api/v1/data", body, sizeof(body)) != 0) return;
     if (!strstr(body, "active_liter_lpm")) return;
     double lpm = json_num(body, "active_liter_lpm", 0);
-    if (bxt_ensure() == 0)
+    double m3  = json_num(body, "total_liter_m3", -1);
+    if (bxt_ensure() == 0) {
         bxt_notify(UUID_WATER, "WaterFlowMeter", "CurrentWaterFlow", lpm, 0);
+        /* Cumulative water reading as litres for the integer-typed
+         * CurrentWaterQuantity field. Skipped if the meter reading is
+         * missing rather than publishing 0 (which would wreck the
+         * monotonic-rising assumption of consumption charts). */
+        if (m3 >= 0)
+            bxt_notify(UUID_WATER, "WaterQuantityMeter",
+                       "CurrentWaterQuantity", m3 * 1000.0, 1);
+    }
 }
 
 /* ===================================================================== */
@@ -642,6 +679,25 @@ static void elec_publish(const char *json) {
         bxt_notify(UUID_ELEC, "ElectricityFlowMeter",
                    "CurrentElectricityFlow", pw, 1);
     }
+    /* Cumulative elec meter — kWh from the WS frame, published as Wh so
+     * the integer-typed hcb_rrd CurrentElectricityQuantity field gets
+     * monotonic-rising values. Sum t1+t2 since we bind the placeholder
+     * elec_quantity_nt and the chart's read code sums nt+lt anyway. */
+    /* WS measurement frame uses shorter field names than the v1 REST API:
+     *   "energy_import_t1_kwh", "energy_import_t2_kwh" (or total_kwh).
+     * Fall back to the v1 names so the same code works against either. */
+    double e_t1 = json_num(json, "energy_import_t1_kwh", -1);
+    double e_t2 = json_num(json, "energy_import_t2_kwh", -1);
+    if (e_t1 < 0) e_t1 = json_num(json, "total_power_import_t1_kwh", -1);
+    if (e_t2 < 0) e_t2 = json_num(json, "total_power_import_t2_kwh", -1);
+    if (e_t1 < 0) e_t1 = json_num(json, "energy_import_kwh", -1);
+    if (e_t1 < 0) e_t1 = json_num(json, "total_power_import_kwh", -1);
+    if (e_t2 < 0) e_t2 = 0;
+    if (e_t1 >= 0 && bxt_ensure() == 0) {
+        double wh = (e_t1 + (e_t2 > 0 ? e_t2 : 0)) * 1000.0;
+        bxt_notify(UUID_ELEC, "ElectricityQuantityMeter",
+                   "CurrentElectricityQuantity", wh, 1);
+    }
     /* gas (external array) */
     double m3 = json_external_value(json, "gas_meter", -1);
     if (m3 >= 0) {
@@ -652,8 +708,13 @@ static void elec_publish(const char *json) {
             rate_lph = dm3 * 1000.0 * 3600.0 / (double)(now - g_prev_gas_t);
         }
         g_prev_gas_m3 = m3; g_prev_gas_t = now;
-        if (bxt_ensure() == 0)
+        if (bxt_ensure() == 0) {
             bxt_notify(UUID_GAS, "GasFlowMeter", "CurrentGasFlow", rate_lph, 1);
+            /* Cumulative gas reading as litres (m3 * 1000) for the
+             * integer-typed CurrentGasQuantity field. */
+            bxt_notify(UUID_GAS, "GasQuantityMeter",
+                       "CurrentGasQuantity", m3 * 1000.0, 1);
+        }
     }
 }
 
@@ -697,7 +758,7 @@ static int elec_run_once(void) {
         } else if (json_type_is(msg, "measurement")) {
             static int first = 1;
             if (first) {
-                logmsg("ws: first measurement (%zu B): %.180s%s",
+                logmsg("ws: first measurement (%zu B): %.640s%s",
                        mlen, msg, mlen > 180 ? "..." : "");
                 first = 0;
             }

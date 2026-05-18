@@ -225,9 +225,6 @@ static void render_chart(void) {
         else lv_label_set_text_fmt(lbl_value, "%.1f %s", cur, m->unit_flow);
     } else {
         lv_label_set_text(lbl_unit, "Period total");
-        /* If every sample is NaN, the *_quantity_* loggers are wired but
-         * empty (only *_flow* is being written by p1bridge). Show that
-         * explicitly instead of "0.0 kWh". */
         if (cn < 2) {
             lv_label_set_text(lbl_value, "no data");
         } else {
