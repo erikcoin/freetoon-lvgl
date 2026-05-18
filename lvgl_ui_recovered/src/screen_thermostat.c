@@ -84,40 +84,24 @@ static void refresh_cb(lv_timer_t * t) {
     float flow_t = (toon_state.boiler_out_temp > 0)
                        ? toon_state.boiler_out_temp
                        : toon_state.boiler_temp;
+    /* Status line — short word only ("Heating" / "Hot water" / "Boiler idle").
+     * The radiator+flame glyph next to the indoor temp carries the visual,
+     * and the right-column "CH water Flow … Return …" panel has the temps.
+     * The old left-side flame/faucet/drop icons are now redundant — kept as
+     * widgets but always hidden. */
     if (toon_state.burner_on) {
-        /* "Heating  → 90 C  (flow 65 C)" — the arrow target is the boiler
-         * water setpoint happ_thermstat is asking for, the parens value is
-         * the actual flow temp coming back. */
-        if (toon_state.ch_setpoint > 0)
-            lv_label_set_text_fmt(lbl_burner,
-                "Heating  -> %.0f C  (flow %.1f C)",
-                toon_state.ch_setpoint, flow_t);
-        else
-            lv_label_set_text_fmt(lbl_burner, "Heating  (flow %.1f C)",
-                                  flow_t);
+        lv_label_set_text(lbl_burner, "Heating");
         lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0xff6644), 0);
-        lv_obj_clear_flag(img_flame,  LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
     } else if (toon_state.dhw_on) {
-        lv_label_set_text_fmt(lbl_burner, "Hot water  (flow %.1f C)", flow_t);
+        lv_label_set_text(lbl_burner, "Hot water");
         lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0x44aaff), 0);
-        lv_obj_add_flag(img_flame, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
-    } else if (flow_t > 0) {
-        lv_label_set_text_fmt(lbl_burner, "Boiler idle  (flow %.1f C)", flow_t);
-        lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0x88aabb), 0);
-        lv_obj_add_flag(img_flame,  LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_label_set_text(lbl_burner, "Boiler idle");
         lv_obj_set_style_text_color(lbl_burner, lv_color_hex(0x88aabb), 0);
-        lv_obj_add_flag(img_flame,  LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
     }
+    lv_obj_add_flag(img_flame,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(img_faucet, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(img_drop,   LV_OBJ_FLAG_HIDDEN);
 
     /* CH water inlet/outlet temps. Flow falls back to the boiler
        TemperatureSensor (always present) if the boilerTemps query hasn't

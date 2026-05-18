@@ -88,12 +88,10 @@ at the top, weather strip at the bottom.
 ![Dim](docs/screenshots/dim.png)
 
 ### Heater detail
-Boiler-side telemetry — flow + return water temps, modulation level, CH
-setpoint from the stooklijn, water pressure, eCO₂ / TVOC / humidity. The
-`Advanced` button opens a full dump of every OpenTherm DataId currently
-tracked by OTGW.
-
-![Heater detail](docs/screenshots/heater-detail.png)
+Tap the heater tile from home to see boiler-side telemetry — flow + return
+water temps, modulation level, CH setpoint from the stooklijn, water
+pressure, eCO₂ / TVOC / humidity. The `Advanced` button opens a full dump
+of every OpenTherm DataId currently tracked by OTGW.
 
 ### PWA
 Served at `http://<toon>:10081/` from the device itself. Same controls as the

@@ -409,27 +409,19 @@ static void refresh_cb(lv_timer_t * t) {
     else
         lv_obj_set_style_text_color(lbl_t_program, lv_color_hex(COL_TEXT_DIM), 0);
 
-    /* Drop the "heating" / "hot water" / "idle" word — the flame / faucet
-     * icons say it more clearly. The label is reused to print just the CH
-     * target temp when the boiler is firing ("-> 90 C"); it stays empty
-     * for DHW (the faucet icon is sufficient) and for idle. */
+    /* Pure-icon burner indicator next to the big indoor-temp number. No
+     * "-> 90 C" text — the radiator+flame glyph carries the meaning, same
+     * style as the dim and heater-detail screens. */
+    lv_label_set_text(lbl_t_burner, "");
     if (toon_state.burner_on) {
-        if (toon_state.ch_setpoint > 0)
-            lv_label_set_text_fmt(lbl_t_burner, "-> %.0f C",
-                                  toon_state.ch_setpoint);
-        else
-            lv_label_set_text(lbl_t_burner, "");
-        lv_obj_set_style_text_color(lbl_t_burner, lv_color_hex(COL_BURNER_RED), 0);
         lv_obj_clear_flag(tile_img_flame,  LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(tile_img_faucet, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(tile_img_drop,   LV_OBJ_FLAG_HIDDEN);
     } else if (toon_state.dhw_on) {
-        lv_label_set_text(lbl_t_burner, "");
         lv_obj_add_flag(tile_img_flame, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(tile_img_faucet, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(tile_img_drop,   LV_OBJ_FLAG_HIDDEN);
     } else {
-        lv_label_set_text(lbl_t_burner, "");
         lv_obj_add_flag(tile_img_flame,  LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(tile_img_faucet, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(tile_img_drop,   LV_OBJ_FLAG_HIDDEN);
@@ -1094,12 +1086,15 @@ lv_obj_t * screen_home_create(void) {
      * Native 32×40 source; render at full size (zoom 256) so the symbol
      * reads at a glance. Flame sits left of the target-temp label, faucet
      * & drop pair on the left for DHW. */
+    /* Icons sit to the right of the big indoor-temp label (lbl_t_temp at
+     * CENTER (0, -90), 48-pt font ≈ 150 px wide). Same placement style
+     * as dim and heater-detail screens. */
     tile_img_flame = lv_img_create(th);
-    lv_img_set_src(tile_img_flame, &icon_flame);
+    lv_img_set_src(tile_img_flame, &icon_radiator);
     lv_img_set_zoom(tile_img_flame, 256);
     lv_obj_set_style_img_recolor(tile_img_flame, lv_color_hex(COL_BURNER_RED), 0);
     lv_obj_set_style_img_recolor_opa(tile_img_flame, 255, 0);
-    lv_obj_align(tile_img_flame, LV_ALIGN_BOTTOM_MID, -20, -32);
+    lv_obj_align(tile_img_flame, LV_ALIGN_CENTER, 110, -90);
     lv_obj_add_flag(tile_img_flame, LV_OBJ_FLAG_HIDDEN);
 
     tile_img_faucet = lv_img_create(th);
@@ -1107,15 +1102,15 @@ lv_obj_t * screen_home_create(void) {
     lv_img_set_zoom(tile_img_faucet, 256);
     lv_obj_set_style_img_recolor(tile_img_faucet, lv_color_hex(0xcccccc), 0);
     lv_obj_set_style_img_recolor_opa(tile_img_faucet, 255, 0);
-    lv_obj_align(tile_img_faucet, LV_ALIGN_BOTTOM_MID, -30, -32);
+    lv_obj_align(tile_img_faucet, LV_ALIGN_CENTER, 105, -100);
     lv_obj_add_flag(tile_img_faucet, LV_OBJ_FLAG_HIDDEN);
 
     tile_img_drop = lv_img_create(th);
     lv_img_set_src(tile_img_drop, &icon_drop);
     lv_img_set_zoom(tile_img_drop, 256);
-    lv_obj_set_style_img_recolor(tile_img_drop, lv_color_hex(0xff3333), 0);
+    lv_obj_set_style_img_recolor(tile_img_drop, lv_color_hex(0x66bbff), 0);
     lv_obj_set_style_img_recolor_opa(tile_img_drop, 255, 0);
-    lv_obj_align(tile_img_drop, LV_ALIGN_BOTTOM_MID, -50, -22);
+    lv_obj_align(tile_img_drop, LV_ALIGN_CENTER, 125, -80);
     lv_obj_add_flag(tile_img_drop, LV_OBJ_FLAG_HIDDEN);
 
     /* --- Waste tile: two stacked pickup rows ---
