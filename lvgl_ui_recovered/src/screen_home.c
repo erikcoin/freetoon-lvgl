@@ -392,8 +392,13 @@ static void refresh_cb(lv_timer_t * t) {
 
     if (toon_state.indoor_temp > 0)
         lv_label_set_text_fmt(lbl_t_temp, "%.1f C", display_indoor_temp(toon_state.indoor_temp));
-    if (toon_state.setpoint > 0)
+    /* "to X" only when the boiler is actively heating CH — when idle the
+     * setpoint is uninteresting (room is already at/above target), so
+     * blank the label to keep the tile clean. */
+    if (toon_state.burner_on && toon_state.setpoint > 0)
         lv_label_set_text_fmt(lbl_t_setpoint, "to %.1f C", toon_state.setpoint);
+    else
+        lv_label_set_text(lbl_t_setpoint, "");
 
     /* Active scheme (Comfort/Home/Sleep/Away) or "Manual" if overridden. */
     lv_label_set_text(lbl_t_program, program_label());
@@ -683,13 +688,23 @@ static void refresh_cb(lv_timer_t * t) {
         }
     }
 
-    /* Water tile (replaces Inbox placeholder) — total + live l/min.
-       Spinner is shown only when water is actively flowing. */
+    /* Water tile: cumulative m³ on top, per-pour line below. Live L/min
+     * while flowing; right after the tap closes the session total stays
+     * visible ("+1.4 L just poured") for ~60 s so the user gets immediate
+     * feedback that the pour registered. */
     if (lbl_inbox_main && hw_state.connected_water) {
         lv_label_set_text_fmt(lbl_inbox_main, "%.2f m3", hw_state.water_total_m3);
     }
     if (lbl_inbox_sub && hw_state.connected_water) {
-        lv_label_set_text_fmt(lbl_inbox_sub, "%.1f L/min", hw_state.water_lpm);
+        if (hw_state.water_lpm > 0.05f)
+            lv_label_set_text_fmt(lbl_inbox_sub, "%.1f L/min  +%.1f L",
+                                  hw_state.water_lpm,
+                                  hw_state.water_session_l);
+        else if (hw_state.water_session_l > 0)
+            lv_label_set_text_fmt(lbl_inbox_sub, "+%.1f L just poured",
+                                  hw_state.water_session_l);
+        else
+            lv_label_set_text(lbl_inbox_sub, "0.0 L/min");
     }
     /* (water_spinner visibility decided ONCE at the bottom of refresh_cb
      * with the proper connected_water + >0.05 LPM gate. This earlier copy
@@ -819,13 +834,23 @@ static void refresh_cb(lv_timer_t * t) {
         }
     }
 
-    /* Water tile (replaces Inbox placeholder) — total + live l/min.
-       Spinner is shown only when water is actively flowing. */
+    /* Water tile: cumulative m³ on top, per-pour line below. Live L/min
+     * while flowing; right after the tap closes the session total stays
+     * visible ("+1.4 L just poured") for ~60 s so the user gets immediate
+     * feedback that the pour registered. */
     if (lbl_inbox_main && hw_state.connected_water) {
         lv_label_set_text_fmt(lbl_inbox_main, "%.2f m3", hw_state.water_total_m3);
     }
     if (lbl_inbox_sub && hw_state.connected_water) {
-        lv_label_set_text_fmt(lbl_inbox_sub, "%.1f L/min", hw_state.water_lpm);
+        if (hw_state.water_lpm > 0.05f)
+            lv_label_set_text_fmt(lbl_inbox_sub, "%.1f L/min  +%.1f L",
+                                  hw_state.water_lpm,
+                                  hw_state.water_session_l);
+        else if (hw_state.water_session_l > 0)
+            lv_label_set_text_fmt(lbl_inbox_sub, "+%.1f L just poured",
+                                  hw_state.water_session_l);
+        else
+            lv_label_set_text(lbl_inbox_sub, "0.0 L/min");
     }
     /* (water_spinner visibility decided ONCE at the bottom of refresh_cb
      * with the proper connected_water + >0.05 LPM gate. This earlier copy

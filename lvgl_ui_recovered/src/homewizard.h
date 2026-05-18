@@ -18,6 +18,13 @@ typedef struct {
     volatile int    connected_water;
     volatile float  water_total_m3;   /* total_liter_m3 (cumulative m³) */
     volatile float  water_lpm;        /* active_liter_lpm */
+    /* Per-pour session — set by the poller when L/min rises from 0 to >0,
+     * finalised when it returns to 0 and stays there for ~20 s. Lets the
+     * UI show "+12.3 L" so the user gets immediate feedback after using
+     * water, without waiting for the next billing-cycle aggregate. */
+    volatile float  water_session_l;       /* litres in the current/last pour */
+    volatile int    water_session_active;  /* 1 while pouring, 0 between */
+    volatile int    water_session_age_s;   /* seconds since session ended (for fade) */
 } hw_state_t;
 
 extern hw_state_t hw_state;

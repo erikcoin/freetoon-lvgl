@@ -227,24 +227,21 @@ gen_bgra("icon_fan", W_FAN, H_FAN, fan_alpha, (0x66, 0xdd, 0xff), "icon_fan.h")
 print("Wrote icon_flame.h, icon_faucet.h, icon_drop.h, icon_fan.h (BGRA)")
 
 # ----- per-waste-type icons (alpha-8, recolored at runtime) -----
-# Newspaper for "Papier" — stack of two rectangles with horizontal text lines.
-W_NEWS, H_NEWS = 60, 60
+# Newspaper for "Papier" — 44x44 instead of 60x60 so its visual weight
+# matches the milk/leaf icons next to it (they're mostly outline, news is
+# solid → at the same bounding-box size news looked much bigger).
+W_NEWS, H_NEWS = 44, 44
 def news_alpha(x, y):
-    # 60x60 newspaper icon — flat front-page look:
-    #   - thick outer rectangle
-    #   - solid masthead band on top
-    #   - heavy headline bar below masthead
-    #   - photo block on the left
-    #   - 3 dashed text lines to the right of the photo
-    #   - 3 full-width dashed text lines below the photo
-    # Inspired by bigstockphoto.com/image-67008982.
-    on_outline = ((x in (4, 56) and 4 <= y <= 56) or
-                  (y in (4, 56) and 4 <= x <= 56))
-    in_masthead = (6 <= x <= 54 and 6 <= y <= 13)
-    in_headline = (6 <= x <= 54 and 17 <= y <= 20)
-    in_photo    = (6 <= x <= 22 and 24 <= y <= 38)
-    on_right_text = (y in (26, 30, 34) and 24 <= x <= 54)
-    on_lower_text = (y in (42, 46, 50) and 6 <= x <= 54)
+    # Front-page look, scaled down:
+    #   - thin outer rectangle (1-px stroke)
+    #   - masthead band, headline bar, photo block, text lines
+    on_outline = ((x in (3, 40) and 3 <= y <= 40) or
+                  (y in (3, 40) and 3 <= x <= 40))
+    in_masthead = (5 <= x <= 38 and 5 <= y <= 10)
+    in_headline = (5 <= x <= 38 and 13 <= y <= 15)
+    in_photo    = (5 <= x <= 16 and 18 <= y <= 27)
+    on_right_text = (y in (19, 22, 25) and 18 <= x <= 38)
+    on_lower_text = (y in (30, 33, 36) and 5 <= x <= 38)
     if on_outline or in_masthead or in_headline or in_photo:
         return 255
     if on_right_text or on_lower_text:

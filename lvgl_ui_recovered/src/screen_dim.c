@@ -104,7 +104,8 @@ static void refresh_cb(lv_timer_t * t) {
         lv_label_set_text_fmt(lbl_temp, "%.1f C", display_indoor_temp(toon_state.indoor_temp));
     else
         lv_label_set_text(lbl_temp, "...");
-    if (toon_state.setpoint > 0)
+    /* "to X" only when CH is actively heating — see screen_home.c. */
+    if (toon_state.burner_on && toon_state.setpoint > 0)
         lv_label_set_text_fmt(lbl_setpoint, "to %.1f C", toon_state.setpoint);
     else
         lv_label_set_text(lbl_setpoint, "");
@@ -203,15 +204,25 @@ static void refresh_cb(lv_timer_t * t) {
             lv_obj_add_flag(wx_icon, LV_OBJ_FLAG_HIDDEN);
         }
     }
-    /* Forecast strip — same gating as the weather icon. */
+    /* Forecast strip — 3-hourly to match home screen. Falls back to daily
+     * if the hourly feed hasn't populated yet (first 30 s after boot). */
+    int use_hourly = settings.show_dim_weather && weather_state.hour_count > 0;
+    int n_slots    = use_hourly ? weather_state.hour_count : weather_state.day_count;
     for (int i = 0; i < WEATHER_FORECAST_DAYS; i++) {
         if (!dim_fc_icon[i]) continue;
-        if (settings.show_dim_weather && i < weather_state.day_count) {
-            const weather_day_t * d = &weather_state.days[i];
-            lv_img_set_src(dim_fc_icon[i], weather_icon_for(d->icon));
-            lv_label_set_text(dim_fc_day[i], d->day);
-            lv_label_set_text_fmt(dim_fc_temp[i], "%.0f/%.0f C",
-                                  d->min_temp, d->max_temp);
+        if (settings.show_dim_weather && i < n_slots) {
+            if (use_hourly) {
+                const weather_hour_t * h = &weather_state.hours[i];
+                lv_img_set_src(dim_fc_icon[i], weather_icon_for(h->icon));
+                lv_label_set_text(dim_fc_day[i], h->label);
+                lv_label_set_text_fmt(dim_fc_temp[i], "%.0f C", h->temperature);
+            } else {
+                const weather_day_t * d = &weather_state.days[i];
+                lv_img_set_src(dim_fc_icon[i], weather_icon_for(d->icon));
+                lv_label_set_text(dim_fc_day[i], d->day);
+                lv_label_set_text_fmt(dim_fc_temp[i], "%.0f/%.0f C",
+                                      d->min_temp, d->max_temp);
+            }
             lv_obj_clear_flag(dim_fc_icon[i], LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(dim_fc_day[i],  LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(dim_fc_temp[i], LV_OBJ_FLAG_HIDDEN);

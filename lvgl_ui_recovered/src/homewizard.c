@@ -82,6 +82,15 @@ static void poll_p1(void) {
     hw_state.connected_p1     = 1;
 }
 
+/* Track per-pour session totals. session_start_m3 is captured the moment
+ * flow rises above zero; session_l keeps the running delta. When flow stays
+ * zero for the full grace window the session is finalised but kept visible
+ * for an additional fade window so the UI can display "+X.X L" briefly. */
+static float session_start_m3 = 0;
+static int   session_zero_seconds = 0;
+#define WATER_SESSION_GRACE_S 20   /* zero-flow seconds before we close   */
+#define WATER_SESSION_FADE_S  60   /* keep "+X L" visible this long after */
+
 static void poll_water(void) {
     static char body[2048];
     if (http_get("192.168.99.115", "/api/v1/data", body, sizeof(body)) != 0) {
@@ -97,6 +106,35 @@ static void poll_water(void) {
     hw_state.water_total_m3 = (float)parse_num(j, "total_liter_m3",   0);
     hw_state.water_lpm      = (float)parse_num(j, "active_liter_lpm", 0);
     hw_state.connected_water = 1;
+
+    /* Session bookkeeping. Called every poll tick (2 s). The poll interval
+     * matters here — session_age_s grows by it on each zero-flow tick. */
+    if (hw_state.water_lpm > 0.05f) {
+        if (!hw_state.water_session_active) {
+            session_start_m3 = hw_state.water_total_m3;
+            hw_state.water_session_active = 1;
+            hw_state.water_session_age_s = 0;
+        }
+        hw_state.water_session_l =
+            (hw_state.water_total_m3 - session_start_m3) * 1000.0f;
+        if (hw_state.water_session_l < 0) hw_state.water_session_l = 0;
+        session_zero_seconds = 0;
+    } else if (hw_state.water_session_active) {
+        /* Flow stopped — wait the grace window before closing the session. */
+        session_zero_seconds += 2;
+        if (session_zero_seconds >= WATER_SESSION_GRACE_S) {
+            hw_state.water_session_active = 0;
+            hw_state.water_session_age_s = 0;
+        }
+    } else if (hw_state.water_session_l > 0) {
+        /* Session closed; fade out the "+X L" display. */
+        hw_state.water_session_age_s += 2;
+        if (hw_state.water_session_age_s >=
+            WATER_SESSION_GRACE_S + WATER_SESSION_FADE_S) {
+            hw_state.water_session_l = 0;
+            hw_state.water_session_age_s = 0;
+        }
+    }
 }
 
 /* Bin start helpers — round a timestamp down to the start of the current
@@ -156,11 +194,16 @@ static void push_to_rrd(void) {
 
 static void * hw_thread(void * arg) {
     (void)arg;
+    /* 2 s loop. Water pours produce a 1-second update on the HWE-WTR side;
+     * at 5 s the live L/min lagged so much that the user couldn't see they
+     * had even turned the tap on. Push-to-RRD also lives inside this loop
+     * but is rate-limited by its own 5-min bucket so the extra ticks cost
+     * nothing on disk. */
     while (1) {
         poll_p1();
         poll_water();
         push_to_rrd();
-        sleep(5);
+        sleep(2);
     }
     return NULL;
 }
