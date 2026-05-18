@@ -89,18 +89,18 @@ const char* program_label(void) {
      * a static buffer; safe because LVGL copies labels on set_text. */
     static char buf[40];
     /* happ_thermstat flips active_state to -1 the moment we write a
-     * roomSetpoint. For our +/- nudges that's not really "Off" — it's a
-     * temporary override on top of the schedule. When temp_override is
+     * roomSetpoint. For our +/- nudges that's not really "Manual" — it's
+     * a temporary override on top of the schedule. When temp_override is
      * armed, paint the label as "Scheduled: <origin preset> (temp)" so
      * the user sees that the schedule will reassert at the next switch.
-     * "Off" is reserved for an explicit hold from the dedicated button. */
+     * "Manual" is reserved for an explicit hold from the dedicated button. */
     int origin = -1;
     if (temp_override_active && temp_override_origin >= 0 &&
                                 temp_override_origin <= 3)
         origin = temp_override_origin;
     int preset_idx = (toon_state.active_state >= 0)
                          ? toon_state.program_state : origin;
-    if (preset_idx < 0) return "Off";
+    if (preset_idx < 0) return "Manual";
     const char * preset;
     switch (preset_idx) {
         case 0: preset = "Comfort"; break;
@@ -773,7 +773,7 @@ int boxtalk_set_program(int state) {
 }
 
 int boxtalk_set_manual(void) {
-    /* "Off" in the UI: leave the schedule and hold the current setpoint
+    /* "Manual" in the UI: leave the schedule and hold the current setpoint
      * indefinitely. happ_thermstat treats roomSetpoint as a permanent
      * override (active_state = -1) on its own; we mirror that locally so
      * the UI updates instantly. Any temporary-override bookkeeping is

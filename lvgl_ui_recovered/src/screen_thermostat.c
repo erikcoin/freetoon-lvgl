@@ -31,14 +31,13 @@ static lv_obj_t * lbl_date;
 static lv_timer_t * refresh_timer = NULL;
 /* Program preset buttons just below the indoor temp.
  *   [0] Scheduled  → resume_schedule (whatever the schedule says now)
- *   [1] Off        → set_manual (permanent hold, activeState = -1).
- *                    Labelled "Off" = "off the schedule" because the home
- *                    tile's +/- nudges are temporary (auto-resume at the
- *                    next switch); this button is how you ask for a
- *                    permanent manual hold instead.
+ *   [1] Manual     → set_manual (permanent hold, activeState = -1).
+ *                    This is the dedicated "leave the schedule
+ *                    indefinitely" control; the home tile's +/- nudges
+ *                    are temporary (auto-resume at the next switch).
  *   [2..5] Comfort/Home/Sleep/Away → set_program(0..3)
  * Sentinel -2 in prog_state[] means "resume schedule" — distinct from -1
- * (manual). The active mode (Scheduled or Off) AND the active preset
+ * (manual). The active mode (Scheduled or Manual) AND the active preset
  * both get a white outline; the two highlights live on different buttons
  * so they don't clash. */
 static lv_obj_t * btn_prog[6] = {0};
@@ -253,7 +252,7 @@ lv_obj_t * screen_thermostat_create(void) {
      * schedule editor pills for instant recognition; Scheduled uses a
      * neutral teal so it doesn't fight any of the preset colours. */
     {
-        const char * names[6] = {"Scheduled", "Off",
+        const char * names[6] = {"Scheduled", "Manual",
                                  "Comfort", "Home", "Sleep", "Away"};
         uint32_t     cols[6]  = {0x2f6b6b, 0x6a5424,
                                  0xcc7733, 0x3377cc, 0x553388, 0x557788};
