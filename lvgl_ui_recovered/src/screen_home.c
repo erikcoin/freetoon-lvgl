@@ -819,14 +819,27 @@ static void refresh_cb(lv_timer_t * t) {
         lv_label_set_text_fmt(lbl_outside_main, "%.1f C",
                               weather_state.current_temp);
     }
-    /* "Medemblik · 14.7 C" header above the forecast strip. */
+    /* "Medemblik - 14.7 C now   |   Ronald: home  Caja: home" header
+     * above the forecast strip. Life360 strings come from HA poller —
+     * stay blank if Life360 isn't available so the city still reads. */
     if (lbl_forecast_city) {
         const char * city = settings.weather_location[0] ? settings.weather_location : "Forecast";
+        char wx[64];
         if (weather_state.connected)
-            lv_label_set_text_fmt(lbl_forecast_city, "%s  -  %.1f C now",
-                                  city, weather_state.current_temp);
+            snprintf(wx, sizeof wx, "%s  -  %.1f C now",
+                     city, weather_state.current_temp);
         else
-            lv_label_set_text(lbl_forecast_city, city);
+            snprintf(wx, sizeof wx, "%s", city);
+
+        if (ha_state.loc_ronald[0] || ha_state.loc_caja[0]) {
+            lv_label_set_text_fmt(lbl_forecast_city,
+                "%s   |   Ronald: %s   Caja: %s",
+                wx,
+                ha_state.loc_ronald[0] ? ha_state.loc_ronald : "?",
+                ha_state.loc_caja[0]   ? ha_state.loc_caja   : "?");
+        } else {
+            lv_label_set_text(lbl_forecast_city, wx);
+        }
     }
 
     /* Forecast band — splat-recovery left two more copies of this

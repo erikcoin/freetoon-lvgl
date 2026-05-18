@@ -225,6 +225,41 @@ void ha_light_toggle_async(const char * entity_id) {
 void ha_lights_all_on_async(void)  { fire_light_action("turn_on",  "light.all_lights"); }
 void ha_lights_all_off_async(void) { fire_light_action("turn_off", "light.all_lights"); }
 
+/* Fetch a device_tracker.life360_* and compress to a short display string.
+ *   home  → "home"
+ *   else  → "<street>, <city>" trimmed from the "address" attribute, or
+ *           the bare state if no address is available. */
+static void poll_life360_one(const char * entity_id, char * out, size_t outsz) {
+    char body[1536];
+    if (ha_get_state(entity_id, body, sizeof(body)) != 0) return;
+    char state[24] = {0};
+    extract_str(body, "state", state, sizeof(state));
+    if (strcmp(state, "home") == 0) {
+        snprintf(out, outsz, "home");
+        return;
+    }
+    /* Try address (Life360 attribute) — trim long zip+region tails so the
+     * inline display stays short. */
+    char addr[160] = {0};
+    extract_str(body, "address", addr, sizeof(addr));
+    if (addr[0]) {
+        /* Keep only "street, city" if there are >= 2 commas in the field. */
+        char * c1 = strchr(addr, ',');
+        char * c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+        if (c2) *c2 = 0;
+        snprintf(out, outsz, "%s", addr);
+    } else if (state[0]) {
+        snprintf(out, outsz, "%s", state);
+    }
+}
+
+static void poll_life360(void) {
+    poll_life360_one("device_tracker.life360_ronald_brakeboer",
+                     ha_state.loc_ronald, sizeof(ha_state.loc_ronald));
+    poll_life360_one("device_tracker.life360_caja_brakeboer",
+                     ha_state.loc_caja,   sizeof(ha_state.loc_caja));
+}
+
 static void poll_once(void) {
     static int miss = 0;
     char body[1024];
@@ -265,6 +300,7 @@ static void * ha_thread(void * arg) {
     while (1) {
         poll_once();
         poll_lights();
+        poll_life360();
         /* Speed up the poll while the curtain is actively moving so the
          * spinner / position bar feel live. Back off to the normal 10 s
          * cadence as soon as it parks. */
