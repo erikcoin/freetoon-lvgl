@@ -36,16 +36,45 @@ read_choice() {
 CHOICE=$(read_choice)
 echo "$(date '+%F %T') $NAME: ui_choice=$CHOICE" >> "$LOG"
 
+# Poll interval for re-checking /mnt/data/ui_choice while idling in
+# qt-gui mode. Five seconds is a reasonable trade-off — short enough that
+# a user flipping back to freetoon doesn't wait noticeably for their
+# bridges to come back online, long enough that the gate doesn't show
+# up in `top` as a CPU consumer.
+POLL_S=5
+
+idle_loop() {
+    # Stay alive (init thinks the qbri / p1br row is fine) but re-check
+    # ui_choice every POLL_S seconds. As soon as it flips away from
+    # qt-gui, exit so init respawns us — the fresh entry then exec's the
+    # bridge binary because the new CHOICE matches.
+    #
+    # The previous `exec sleep 86400` design left init in the dark
+    # for a full day: even after ui_choice flipped back the gate was
+    # already gone from init's POV (it had exec'd into sleep, which
+    # didn't itself terminate), so the qbri row never respawned and the
+    # bridge stayed offline until someone manually killed the sleep.
+    while true; do
+        sleep "$POLL_S"
+        new=$(read_choice)
+        if [ "$new" != "qt-gui" ]; then
+            echo "$(date '+%F %T') $NAME: ui_choice flipped to $new — exiting so init respawns the gate" >> "$LOG"
+            exit 0
+        fi
+    done
+}
+
 if [ "$CHOICE" = "qt-gui" ]; then
-    # In qt-gui mode we want stock daemons in charge. Sleep long enough
-    # that init doesn't respawn us in a tight loop — the user kills us
-    # with `pkill -f $NAME` after flipping modes back.
-    exec sleep 86400
+    idle_loop
+    # idle_loop only returns via exit; this line is unreachable.
 fi
 
 if [ ! -x "$BIN" ]; then
-    echo "$(date '+%F %T') $NAME: $BIN not executable — sleeping" >> "$LOG"
-    exec sleep 86400
+    echo "$(date '+%F %T') $NAME: $BIN not executable — entering idle loop" >> "$LOG"
+    # Reuse idle_loop: it'll keep re-checking ui_choice anyway. If the
+    # binary appears we'll cycle back through main on the next respawn
+    # and pick it up.
+    idle_loop
 fi
 
 exec "$BIN" "$@"
