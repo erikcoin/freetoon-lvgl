@@ -51,52 +51,28 @@ static stats_series_t  series2;   /* for elec second tariff */
 
 static void on_back(lv_event_t * e) { (void)e; ui_pop(); }
 
-/* X-axis label override. LVGL hands us each tick value (0..major_cnt-1).
- * We translate to a period-appropriate string (clock time for hour/day,
- * date for week+). Without this hook the X axis shows bare indices. */
-static int g_xtick_compact_count = 0;
+/* Final bar values + labels, produced by render_chart's bucketing step.
+ * The chart shows these directly (one bar per bucket). */
+static double g_bar_val[64];
+static char   g_bar_label[64][8];
+static int    g_bar_count = 0;
+static int    g_xmajor    = 2;   /* number of X tick labels currently drawn */
+
+/* X-axis label override. LVGL hands us each tick ordinal (0..major-1); we
+ * map it to a bucket index and copy that bucket's short label. */
 static void chart_draw_x_label(lv_event_t * e) {
     lv_obj_draw_part_dsc_t * dsc = lv_event_get_draw_part_dsc(e);
     if (!dsc) return;
-    /* In LVGL 8.3, chart's tick-label draw events for the X axis arrive
-     * with dsc->text != NULL and a non-zero text_length; identify the X
-     * axis by dsc->id. Don't require dsc->part — its value differs
-     * between versions and adding the check silently dropped every
-     * label. */
-    if (dsc->text == NULL || dsc->text_length < 4) return;
+    if (dsc->text == NULL || dsc->text_length < 2) return;
     if (dsc->id != LV_CHART_AXIS_PRIMARY_X) return;
-    /* dsc->value is the tick ordinal (0..major-1). Map to a sample index
-     * in the compacted series and copy that sample's short label. */
-    if (g_xtick_compact_count <= 0 || series.n <= 0) {
-        dsc->text[0] = 0; return;
-    }
-    /* Find the Nth real (non-NaN) sample. */
-    int target_ord = dsc->value;   /* 0 = leftmost tick */
-    int major_minus1 = 4;           /* matches the (5,0) tick spec below */
-    if (target_ord < 0) target_ord = 0;
-    if (target_ord > major_minus1) target_ord = major_minus1;
-    int wanted_real_idx = target_ord * (g_xtick_compact_count - 1) / major_minus1;
-    int real_seen = 0;
-    for (int i = 0; i < series.n; i++) {
-        if (isnan(series.samples[i])) continue;
-        if (real_seen == wanted_real_idx) {
-            /* labels[i] is "DD-MM HH:MM"; for hour/day show "HH:MM", for
-             * longer periods show "DD-MM". */
-            const char * lab = series.labels[i];
-            if (selected_period == PERIOD_HOUR || selected_period == PERIOD_DAY) {
-                if (strlen(lab) >= 11) {
-                    /* skip the "DD-MM " prefix */
-                    snprintf(dsc->text, dsc->text_length, "%s", lab + 6);
-                } else snprintf(dsc->text, dsc->text_length, "%s", lab);
-            } else {
-                /* take just "DD-MM" */
-                snprintf(dsc->text, dsc->text_length, "%.5s", lab);
-            }
-            return;
-        }
-        real_seen++;
-    }
-    dsc->text[0] = 0;
+    if (g_bar_count <= 0 || g_xmajor < 2) { dsc->text[0] = 0; return; }
+    int ord = dsc->value;
+    if (ord < 0) ord = 0;
+    if (ord > g_xmajor - 1) ord = g_xmajor - 1;
+    int idx = ord * (g_bar_count - 1) / (g_xmajor - 1);
+    if (idx < 0) idx = 0;
+    if (idx >= g_bar_count) idx = g_bar_count - 1;
+    snprintf(dsc->text, dsc->text_length, "%s", g_bar_label[idx]);
 }
 
 /* Per-period: which logger + rra + time window + how many samples.
@@ -166,107 +142,137 @@ static void style_period_tab(int i, int sel) {
     lv_obj_set_style_border_width(tab_period_btns[i], sel ? 2 : 1, 0);
 }
 
+/* Diff a cumulative series in place to per-sample deltas (Wh / mL),
+ * dropping the cross-tariff artefact jumps above `cap`. */
+static void diff_in_place(stats_series_t * s, int n, double cap) {
+    for (int i = n - 1; i > 0; i--) {
+        if (!isnan(s->samples[i]) && !isnan(s->samples[i-1]) &&
+            s->samples[i] >= s->samples[i-1]) {
+            double d = s->samples[i] - s->samples[i-1];
+            s->samples[i] = (d > cap) ? NAN : d;
+        } else {
+            s->samples[i] = NAN;
+        }
+    }
+    if (n > 0) s->samples[0] = NAN;
+}
+
 static void render_chart(void) {
     int n = series.n > STATS_MAX_SAMPLES ? STATS_MAX_SAMPLES : series.n;
-    if (n < 2) n = 2;
+    if (n < 0) n = 0;
 
-    /* For cumulative metrics (Week/Month/Year): diff each series in
-     * place to per-bin deltas, then add the secondary (electricity LT)
-     * deltas into the primary. hcb_rrd's elec_quantity_nt sometimes
-     * returns NT-alone (~1.8 MWh) and sometimes NT+LT combined
-     * (~3.4 MWh) — the source ABI isn't stable. A naïve diff captures
-     * the 1.6 MWh jump as a single bin's "usage." Filter per-bin
-     * deltas above MAX_BIN_DELTA — anything an hourly household will
-     * realistically log is well under 10 kWh, so anything above is
-     * the cross-tariff artefact and gets dropped. Values stay in raw
-     * Wh / mL so the integer cast in lv_chart_set_range below doesn't
-     * round small deltas to 0; the "Period total" label converts to
-     * kWh / m3 at display time. */
-    if (selected_period == PERIOD_WEEK || selected_period == PERIOD_MONTH ||
-        selected_period == PERIOD_YEAR) {
-        /* Sanity cap: 10 kWh per hourly bin (Week) or 200 kWh per
-         * daily bin (Month/Year) is well above household usage. */
-        double max_bin_delta = (selected_period == PERIOD_WEEK)
-                               ? 10000.0   /* 10 kWh in Wh */
-                               : 200000.0; /* 200 kWh in Wh per day */
+    int is_cum = (selected_period == PERIOD_WEEK ||
+                  selected_period == PERIOD_MONTH ||
+                  selected_period == PERIOD_YEAR);
 
-        /* Primary: cumulative → delta */
-        for (int i = n - 1; i > 0; i--) {
-            if (!isnan(series.samples[i]) && !isnan(series.samples[i-1]) &&
-                series.samples[i] >= series.samples[i-1]) {
-                double d = series.samples[i] - series.samples[i-1];
-                series.samples[i] = (d > max_bin_delta) ? NAN : d;
-            } else {
-                series.samples[i] = NAN;
-            }
-        }
-        series.samples[0] = NAN;
-
-        /* Secondary (elec LT): same diff, then sum into primary. */
-        if (selected_metric == 0 && series2.n == series.n) {
-            for (int i = series2.n - 1; i > 0; i--) {
-                if (!isnan(series2.samples[i]) && !isnan(series2.samples[i-1]) &&
-                    series2.samples[i] >= series2.samples[i-1]) {
-                    double d = series2.samples[i] - series2.samples[i-1];
-                    series2.samples[i] = (d > max_bin_delta) ? NAN : d;
-                } else {
-                    series2.samples[i] = NAN;
-                }
-            }
-            series2.samples[0] = NAN;
+    /* Cumulative meters → per-sample usage deltas. The elec NT/LT split is
+     * diffed separately then summed (the source sometimes returns NT-alone,
+     * sometimes NT+LT — diffing before summing avoids a false spike). */
+    if (is_cum) {
+        double cap = (selected_period == PERIOD_WEEK) ? 10000.0 : 200000.0;
+        diff_in_place(&series, n, cap);
+        if (selected_metric == 0 && series2.n >= n) {
+            diff_in_place(&series2, n, cap);
             for (int i = 0; i < n; i++) {
-                if (isnan(series.samples[i]) && !isnan(series2.samples[i])) {
+                if (isnan(series.samples[i]) && !isnan(series2.samples[i]))
                     series.samples[i] = series2.samples[i];
-                } else if (!isnan(series.samples[i]) && !isnan(series2.samples[i])) {
+                else if (!isnan(series.samples[i]) && !isnan(series2.samples[i]))
                     series.samples[i] += series2.samples[i];
-                }
-                /* else: leave whatever's there (delta or NaN) */
             }
         }
     }
 
-    /* Recompute min/max after potential diff. */
-    double lo = +1e30, hi = -1e30;
-    for (int i = 0; i < n; i++) {
-        double v = series.samples[i];
-        if (!isnan(v)) {
-            if (v < lo) lo = v;
-            if (v > hi) hi = v;
+    /* How many bars this period wants — mimics the original Toon: hourly
+     * for Hour/Day, daily for Week/Month, monthly for Year. */
+    int want;
+    switch (selected_period) {
+        case PERIOD_HOUR:  want = 12; break;
+        case PERIOD_DAY:   want = 24; break;
+        case PERIOD_WEEK:  want = 7;  break;
+        case PERIOD_MONTH: want = 31; break;
+        case PERIOD_YEAR:  want = 12; break;
+        default:           want = 12; break;
+    }
+
+    g_bar_count = 0;
+    static const char * mon[] = {"","jan","feb","mar","apr","may","jun",
+                                 "jul","aug","sep","okt","nov","dec"};
+
+    if (selected_period == PERIOD_YEAR) {
+        /* Group consecutive samples by calendar month (MM = label chars 3-4),
+         * summing usage → one bar per month, chronological. */
+        int cur_mm = -1;
+        for (int i = 0; i < n && g_bar_count < 64; i++) {
+            if (isnan(series.samples[i])) continue;
+            const char * lab = series.labels[i];
+            int mm = (lab[3]-'0')*10 + (lab[4]-'0');
+            if (mm != cur_mm) {
+                cur_mm = mm;
+                g_bar_val[g_bar_count] = 0;
+                snprintf(g_bar_label[g_bar_count], sizeof g_bar_label[0],
+                         "%s", (mm >= 1 && mm <= 12) ? mon[mm] : "?");
+                g_bar_count++;
+            }
+            g_bar_val[g_bar_count-1] += series.samples[i];
+        }
+    } else {
+        /* Compact real samples, then aggregate into `want` even buckets:
+         * average for flow (Hour/Day), sum of deltas for cumulative. */
+        static double comp[STATS_MAX_SAMPLES];
+        static int    compi[STATS_MAX_SAMPLES];
+        int cn = 0;
+        for (int i = 0; i < n; i++)
+            if (!isnan(series.samples[i])) { comp[cn] = series.samples[i]; compi[cn] = i; cn++; }
+        int bars = (want < cn) ? want : cn;
+        if (bars > 64) bars = 64;
+        for (int b = 0; b < bars; b++) {
+            int s = b * cn / bars, e = (b + 1) * cn / bars;
+            if (e <= s) e = s + 1;
+            if (e > cn) e = cn;
+            double acc = 0; int cnt = 0;
+            for (int k = s; k < e; k++) { acc += comp[k]; cnt++; }
+            g_bar_val[b] = is_cum ? acc : (cnt ? acc / cnt : 0);
+            const char * lab = series.labels[compi[s]];
+            if (selected_period == PERIOD_HOUR || selected_period == PERIOD_DAY)
+                snprintf(g_bar_label[b], sizeof g_bar_label[0], "%.5s", lab + 6); /* HH:MM */
+            else
+                snprintf(g_bar_label[b], sizeof g_bar_label[0], "%.5s", lab);     /* DD-MM */
+            g_bar_count++;
         }
     }
-    if (lo > hi) { lo = 0; hi = 1; }
-    if (hi - lo < 0.5) hi = lo + 1.0;
-    double pad = (hi - lo) * 0.1;
 
-    /* Compact non-NaN samples so the chart's X axis maps to "real data
-     * only". Without this, RRD's leading NaN gap (no data older than ~3 h
-     * for hour view) ate ~90 % of the chart width and the visible trace
-     * collapsed into the right edge. */
-    static double comp[STATS_MAX_SAMPLES];
-    int cn = 0;
-    for (int i = 0; i < n; i++) {
-        double v = series.samples[i];
-        if (!isnan(v)) comp[cn++] = v;
-    }
-    if (cn < 2) cn = 2;
+    /* Cumulative bars are summed deltas in Wh/mL — a month easily exceeds
+     * 300 000, which overflows lv_coord_t (int16) in lv_chart. Scale to the
+     * display unit (kWh/m3) so bar values + the Y range stay in int16 range. */
+    if (is_cum)
+        for (int i = 0; i < g_bar_count; i++) g_bar_val[i] /= 1000.0;
 
-    lv_chart_set_point_count(chart, cn);
-    g_xtick_compact_count = cn;       /* used by chart_draw_x_label */
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y,
-                       (lv_coord_t)(lo - pad), (lv_coord_t)(hi + pad));
-    for (int i = 0; i < cn; i++) {
-        cs->y_points[i] = (lv_coord_t)comp[i];
-    }
+    /* Y range from 0 baseline (bars) up to ~110% of the tallest bar. */
+    double hi = 0;
+    for (int i = 0; i < g_bar_count; i++) if (g_bar_val[i] > hi) hi = g_bar_val[i];
+    double top = hi * 1.1; if (top < 1) top = 1;
+
+    /* lv_chart's bar draw faults with a single data point, so keep at least
+     * two slots — extra slots beyond the real bars are LV_CHART_POINT_NONE
+     * (not drawn). Happens for Year when only the current month has history. */
+    int pc = g_bar_count < 2 ? 2 : g_bar_count;
+    lv_chart_set_point_count(chart, pc);
+    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, (lv_coord_t)top);
+    for (int i = 0; i < pc; i++)
+        cs->y_points[i] = (i < g_bar_count) ? (lv_coord_t)g_bar_val[i]
+                                            : LV_CHART_POINT_NONE;
+
+    /* X tick labels: one per bar up to 12, otherwise a representative subset. */
+    g_xmajor = g_bar_count; if (g_xmajor > 12) g_xmajor = 12; if (g_xmajor < 2) g_xmajor = 2;
+    lv_chart_set_axis_tick(chart, LV_CHART_AXIS_PRIMARY_X, 6, 0, g_xmajor, 0, true, 30);
     lv_chart_refresh(chart);
 
-    /* Caption above the value: "Current" for live periods, "Period total"
-     * for cumulative ones. Replaces the duplicated unit string. */
+    /* Caption + headline value. */
     const metric_t * m = &metrics[selected_metric];
-    if (selected_period == PERIOD_HOUR || selected_period == PERIOD_DAY) {
+    if (!is_cum) {
         lv_label_set_text(lbl_unit, "Current");
         double cur = NAN;
         if (selected_metric == 0)      cur = hw_state.power_w;
-        else if (selected_metric == 1) cur = hw_state.water_lpm * 0;  /* gas flow not from HW */
         else if (selected_metric == 2) cur = hw_state.water_lpm;
         if (isnan(cur) || cur == 0) {
             for (int i = series.n - 1; i >= 0; i--)
@@ -276,16 +282,12 @@ static void render_chart(void) {
         else lv_label_set_text_fmt(lbl_value, "%.1f %s", cur, m->unit_flow);
     } else {
         lv_label_set_text(lbl_unit, "Period total");
-        if (cn < 2) {
+        if (g_bar_count == 0) {
             lv_label_set_text(lbl_value, "no data");
         } else {
-            double total = 0;
-            for (int i = 0; i < n; i++)
-                if (!isnan(series.samples[i])) total += series.samples[i];
-            /* series.samples now carries the raw RRD delta (Wh / mL).
-             * Divide by 1000 for the user-facing kWh / m3 figure. */
-            lv_label_set_text_fmt(lbl_value, "%.1f %s",
-                                  total / 1000.0, m->unit_cum);
+            double total = 0;   /* g_bar_val already in kWh/m3 for cumulative */
+            for (int i = 0; i < g_bar_count; i++) total += g_bar_val[i];
+            lv_label_set_text_fmt(lbl_value, "%.1f %s", total, m->unit_cum);
         }
     }
 }
@@ -403,20 +405,17 @@ lv_obj_t * screen_stats_create(void) {
     chart = lv_chart_create(scr_root);
     lv_obj_set_size(chart, 700, 300);
     lv_obj_align(chart, LV_ALIGN_TOP_RIGHT, -30, 235);
-    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
-    lv_chart_set_div_line_count(chart, 5, 8);
-    /* 512 samples across 700 px → ~1.4 px/sample. Default 3-px dots overlap
-     * into vertical bars that look like a scatter mess. Drop the per-point
-     * marker, thicken the connecting line so it reads as a graph. */
-    lv_obj_set_style_size(chart, 0, LV_PART_INDICATOR);
-    lv_obj_set_style_line_width(chart, 2, LV_PART_ITEMS);
-    /* Y axis tick labels — 5 major divisions, 2 minor in between, draw_size
-     * 60 reserves the space LVGL needs for the rendered numbers. */
+    /* Bars, like the original Toon energy view. Rounded top corners + a
+     * little inter-bar gap so they read as discrete usage blocks. */
+    lv_chart_set_type(chart, LV_CHART_TYPE_BAR);
+    lv_chart_set_div_line_count(chart, 5, 0);
+    lv_obj_set_style_radius(chart, 3, LV_PART_ITEMS);
+    lv_obj_set_style_pad_column(chart, 3, LV_PART_MAIN);
+    /* Y axis tick labels — 5 major divisions, draw_size 60 reserves space. */
     lv_chart_set_axis_tick(chart, LV_CHART_AXIS_PRIMARY_Y, 8, 4, 5, 2, true, 60);
-    /* X axis tick labels via the chart's DRAW_PART hook so we can write
-     * the compact time-of-sample strings ("11:00", "Mon", …) the period
-     * tab implies, instead of the bare index integers LVGL would print. */
-    lv_chart_set_axis_tick(chart, LV_CHART_AXIS_PRIMARY_X, 8, 4, 5, 0, true, 30);
+    /* X axis tick labels via the DRAW_PART hook — count is set per-render
+     * to match the bucket count (set_axis_tick re-called in render_chart). */
+    lv_chart_set_axis_tick(chart, LV_CHART_AXIS_PRIMARY_X, 6, 0, 2, 0, true, 30);
     lv_obj_add_event_cb(chart, chart_draw_x_label, LV_EVENT_DRAW_PART_BEGIN, NULL);
     lv_obj_set_style_bg_color(chart, lv_color_hex(0x1a2a44), 0);
     lv_obj_set_style_border_color(chart, lv_color_hex(0x335577), 0);

@@ -247,6 +247,66 @@ static void on_scan(lv_event_t * e) {
 }
 
 /* ===================================================================== */
+/* Disconnect (with confirm — it drops the Toon off the network)         */
+/* ===================================================================== */
+static lv_obj_t * g_disc_modal = NULL;
+static void disc_close(void) {
+    if (g_disc_modal) { lv_obj_del(g_disc_modal); g_disc_modal = NULL; }
+}
+static void on_disc_cancel(lv_event_t * e) { (void)e; disc_close(); }
+static void on_disc_confirm(lv_event_t * e) {
+    (void)e;
+    boxtalk_wifi_disconnect();
+    if (lbl_hint) lv_label_set_text(lbl_hint,
+        "Disconnected. Tap Scan to reconnect.");
+    g_cur_ssid[0] = 0; g_internet = -1; g_status_ticks = 0;
+    disc_close();
+}
+static void on_disconnect(lv_event_t * e) {
+    (void)e;
+    g_disc_modal = lv_obj_create(scr_root);
+    lv_obj_set_size(g_disc_modal, 1024, 600);
+    lv_obj_set_pos(g_disc_modal, 0, 0);
+    lv_obj_set_style_bg_color(g_disc_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(g_disc_modal, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(g_disc_modal, 0, 0);
+    lv_obj_clear_flag(g_disc_modal, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t * card = lv_obj_create(g_disc_modal);
+    lv_obj_set_size(card, 640, 240);
+    lv_obj_center(card);
+    lv_obj_set_style_bg_color(card, lv_color_hex(COL_CARD), 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_style_radius(card, 14, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t * t = lv_label_create(card);
+    lv_obj_set_style_text_color(t, lv_color_hex(COL_TEXT_HI), 0);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_22, 0);
+    lv_obj_set_width(t, 600);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+    lv_label_set_text_fmt(t, "Disconnect from %s?\nThe Toon will leave the network until it reconnects.",
+                          g_cur_ssid[0] ? g_cur_ssid : "WiFi");
+    lv_obj_align(t, LV_ALIGN_TOP_LEFT, 12, 12);
+
+    lv_obj_t * yes = lv_btn_create(card);
+    lv_obj_set_size(yes, 170, 48);
+    lv_obj_align(yes, LV_ALIGN_BOTTOM_RIGHT, -8, -4);
+    lv_obj_set_style_bg_color(yes, lv_color_hex(COL_WARN), 0);
+    lv_obj_add_event_cb(yes, on_disc_confirm, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * yl = lv_label_create(yes); lv_label_set_text(yl, "Disconnect");
+    lv_obj_center(yl);
+
+    lv_obj_t * no = lv_btn_create(card);
+    lv_obj_set_size(no, 130, 48);
+    lv_obj_align(no, LV_ALIGN_BOTTOM_LEFT, 8, -4);
+    lv_obj_set_style_bg_color(no, lv_color_hex(COL_OFF), 0);
+    lv_obj_add_event_cb(no, on_disc_cancel, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * nl = lv_label_create(no); lv_label_set_text(nl, "Cancel");
+    lv_obj_center(nl);
+}
+
+/* ===================================================================== */
 /* List rendering                                                        */
 /* ===================================================================== */
 static const char * bars_for(int quality) {
@@ -393,6 +453,20 @@ lv_obj_t * screen_wifi_create(void) {
     lv_obj_set_style_text_font(btn_scan_lbl, &lv_font_montserrat_22, 0);
     lv_label_set_text(btn_scan_lbl, "Scan");
     lv_obj_center(btn_scan_lbl);
+
+    /* Disconnect button (left of Scan) */
+    lv_obj_t * disc = lv_btn_create(scr_root);
+    lv_obj_set_size(disc, 170, 52);
+    lv_obj_align(disc, LV_ALIGN_TOP_RIGHT, -176, 14);
+    lv_obj_set_style_bg_color(disc, lv_color_hex(COL_WARN), 0);
+    lv_obj_set_style_radius(disc, 10, 0);
+    lv_obj_set_ext_click_area(disc, 8);
+    lv_obj_add_event_cb(disc, on_disconnect, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * dl = lv_label_create(disc);
+    lv_obj_set_style_text_color(dl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(dl, &lv_font_montserrat_22, 0);
+    lv_label_set_text(dl, "Disconnect");
+    lv_obj_center(dl);
 
     lbl_hint = lv_label_create(scr_root);
     lv_obj_set_style_text_color(lbl_hint, lv_color_hex(COL_TEXT_DIM), 0);

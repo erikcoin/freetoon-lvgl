@@ -153,5 +153,6 @@ extern char         netcon_response_buf[16384];
 int boxtalk_wifi_get_status(void);
 int boxtalk_wifi_scan(void);
 int boxtalk_wifi_connect(const char * ssid, const char * key);
+int boxtalk_wifi_disconnect(void);
 
 #endif

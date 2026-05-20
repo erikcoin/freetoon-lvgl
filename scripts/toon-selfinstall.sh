@@ -48,20 +48,36 @@ chmod +x "$DEST/toonui"
 rm -rf "$TMP"
 say "installed $(ls -l "$DEST/toonui" | awk '{print $5}') bytes -> $DEST/toonui"
 
-# 4) make sure the launcher is wired into inittab (idempotent).
+# 4) Take over the framebuffer from the stock qt-gui launcher (idempotent).
+# The stock GUI runs from a 'toon:'/'flas:' inittab row that directly execs
+# /qmf/sbin/qt-gui. We replace that with ui_launcher.sh, which OWNS the
+# framebuffer and still runs qt-gui itself when ui_choice says so — so the two
+# never fight. Without this, a stock Toon keeps launching qt-gui alongside us.
 ROW="toon:345:respawn:$DEST/ui_launcher.sh >> /var/volatile/tmp/toonui.log 2>&1"
-if [ -f "$DEST/ui_launcher.sh" ] && ! grep -q "^toon:" /etc/inittab 2>/dev/null; then
-    say "adding inittab launch row"
-    echo "$ROW" >> /etc/inittab
-    telinit q 2>/dev/null || kill -HUP 1 2>/dev/null || true
+if [ -f "$DEST/ui_launcher.sh" ]; then
+    NEED=0
+    grep -qF "$ROW" /etc/inittab 2>/dev/null || NEED=1
+    grep -qE '/qmf/sbin/qt-gui|inittabwrap qt-gui' /etc/inittab 2>/dev/null && NEED=1
+    if [ "$NEED" = 1 ]; then
+        say "taking over the GUI inittab row from stock qt-gui"
+        grep -vE '^toon:|^flas:|/qmf/sbin/qt-gui|inittabwrap qt-gui' /etc/inittab \
+            > /etc/inittab.new \
+            && echo "$ROW" >> /etc/inittab.new \
+            && mv -f /etc/inittab.new /etc/inittab
+        telinit q 2>/dev/null || kill -HUP 1 2>/dev/null || true
+    fi
 fi
 
-# 5) restart the UI (inittab respawns it).
-say "restarting toonui"
+# 5) restart the UI: stop any stock qt-gui AND the old toonui so init respawns
+# through ui_launcher (single owner of the framebuffer).
+say "restarting UI"
+pkill -x qt-gui 2>/dev/null || true
 kill "$(pidof toonui 2>/dev/null)" 2>/dev/null || pkill -x toonui 2>/dev/null || true
 sleep 6
 if pidof toonui >/dev/null 2>&1; then
     say "done — toonui is running (pid $(pidof toonui))."
+elif pidof qt-gui >/dev/null 2>&1; then
+    say "qt-gui is running — set ui_choice=freetoon (Settings) or pick freetoon at the boot picker."
 else
-    say "toonui not detected yet; it should respawn from inittab within ~10s."
+    say "UI not detected yet; ui_launcher should respawn it from inittab within ~10s."
 fi

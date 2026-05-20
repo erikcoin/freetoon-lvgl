@@ -553,6 +553,12 @@ int boxtalk_wifi_connect(const char * ssid, const char * key) {
     return netcon_action("SetWirelessNetworkInformation", inner, "wfc");
 }
 
+/* Disconnect / clear the current wireless config (hcb_netcon ResetWirelessNetwork).
+ * NOTE: on a WiFi-only Toon this drops it off the network until reconnected. */
+int boxtalk_wifi_disconnect(void) {
+    return netcon_action("ResetWirelessNetwork", NULL, "wfx");
+}
+
 /* Switch a binary device on (1) / off (0). Targets the device uuid. */
 int boxtalk_zwave_basic_set(const char * uuid, int state) {
     char inner[160];
