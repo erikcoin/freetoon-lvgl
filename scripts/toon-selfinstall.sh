@@ -24,7 +24,7 @@ say() { echo "[freetoon] $*"; }
 # the single newest release; grep the first tag_name.
 say "resolving latest release"
 TAG=$(curl -fsSL --connect-timeout 8 --max-time 30 \
-        "https://api.github.com/repos/$REPO/releases?per_page=1" \
+        "https://api.github.com/repos/$REPO/releases?per_page=1" 2>/dev/null \
       | grep -m1 '"tag_name"' | sed 's/.*"tag_name"[^"]*"\([^"]*\)".*/\1/')
 if [ -z "$TAG" ]; then
     say "ERROR: could not resolve latest release tag (no internet?)."
