@@ -17,7 +17,11 @@
 #include <unistd.h>
 
 #define UPDATE_CHECK_INTERVAL_S (6 * 3600)   /* 6 h between polls */
-#define RELEASES_API_URL "https://api.github.com/repos/Ierlandfan/freetoon-lvgl/releases/latest"
+/* per_page=1 returns the single newest release INCLUDING prereleases (beta).
+ * /releases/latest would skip prereleases, and all freetoon releases are beta,
+ * so it would never see them. The response is a 1-element array; the JSON
+ * field extractor reads the first (newest) entry. */
+#define RELEASES_API_URL "https://api.github.com/repos/Ierlandfan/freetoon-lvgl/releases?per_page=1"
 
 update_state_t g_update_state = {0};
 

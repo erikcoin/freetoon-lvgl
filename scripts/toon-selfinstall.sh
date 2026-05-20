@@ -6,19 +6,32 @@
 # makes sure the inittab launch row is present, and restarts the UI.
 #
 # One-liner:
-#   curl -fsSL https://github.com/Ierlandfan/freetoon-lvgl/releases/latest/download/toon-selfinstall.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Ierlandfan/freetoon-lvgl/main/scripts/toon-selfinstall.sh | sh
 #
 # Re-running is safe (idempotent): it only adds the inittab row if missing
 # and always backs up the current binary to /mnt/data/toonui.bak first.
 set -e
 
 REPO="Ierlandfan/freetoon-lvgl"
-BASE="https://github.com/$REPO/releases/latest/download"
 DEST="/mnt/data"
 TMP="/tmp/freetoon.$$"
 mkdir -p "$TMP"
 
 say() { echo "[freetoon] $*"; }
+
+# Resolve the newest release tag INCLUDING prereleases — all freetoon releases
+# are beta (prerelease), so /releases/latest would skip them. per_page=1 gives
+# the single newest release; grep the first tag_name.
+say "resolving latest release"
+TAG=$(curl -fsSL --connect-timeout 8 --max-time 30 \
+        "https://api.github.com/repos/$REPO/releases?per_page=1" \
+      | grep -m1 '"tag_name"' | sed 's/.*"tag_name"[^"]*"\([^"]*\)".*/\1/')
+if [ -z "$TAG" ]; then
+    say "ERROR: could not resolve latest release tag (no internet?)."
+    rm -rf "$TMP"; exit 1
+fi
+say "latest release is $TAG"
+BASE="https://github.com/$REPO/releases/download/$TAG"
 
 dl() {  # dl <asset> <out>
     say "fetching $1"

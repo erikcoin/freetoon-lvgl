@@ -390,7 +390,7 @@ static void do_install_now(lv_event_t * e) {
     if (about_status_lbl)
         lv_label_set_text(about_status_lbl, "Installing... the screen will restart shortly.");
     system("setsid sh -c 'sleep 1; curl -fsSL "
-           "https://github.com/Ierlandfan/freetoon-lvgl/releases/latest/download/toon-selfinstall.sh "
+           "https://raw.githubusercontent.com/Ierlandfan/freetoon-lvgl/main/scripts/toon-selfinstall.sh "
            "| sh' >/var/volatile/tmp/selfinstall.log 2>&1 &");
 }
 
