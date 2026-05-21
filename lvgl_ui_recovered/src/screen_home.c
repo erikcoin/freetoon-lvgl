@@ -1996,7 +1996,7 @@ lv_obj_t * screen_home_create(void) {
             lv_obj_t * b = lv_btn_create(th);
             lv_obj_set_size(b, bw, bh);
             lv_obj_align(b, LV_ALIGN_CENTER,
-                         -total / 2 + i * (bw + gap) + bw / 2, 114);
+                         -total / 2 + i * (bw + gap) + bw / 2, 124);
             lv_obj_set_style_bg_color(b, lv_color_hex(cols[i]), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_color(b, lv_color_hex(0xffffff), 0);
@@ -2030,25 +2030,25 @@ lv_obj_t * screen_home_create(void) {
     lv_obj_set_style_text_color(lbl_t_humidity, lv_color_hex(COL_TEXT_DIM), 0);
     lv_obj_set_style_text_font(lbl_t_humidity, &lv_font_montserrat_18, 0);
     lv_label_set_text(lbl_t_humidity, "RH --%");
-    lv_obj_align(lbl_t_humidity, LV_ALIGN_BOTTOM_LEFT, 12, 0);
+    lv_obj_align(lbl_t_humidity, LV_ALIGN_BOTTOM_LEFT, 12, 8);
 
     lbl_t_ppm = lv_label_create(th);
     lv_obj_set_style_text_color(lbl_t_ppm, lv_color_hex(COL_TEXT_DIM), 0);
     lv_obj_set_style_text_font(lbl_t_ppm, &lv_font_montserrat_18, 0);
     lv_label_set_text(lbl_t_ppm, "-- ppm");
-    lv_obj_align(lbl_t_ppm, LV_ALIGN_BOTTOM_LEFT, 140, 0);
+    lv_obj_align(lbl_t_ppm, LV_ALIGN_BOTTOM_LEFT, 140, 8);
 
     lbl_t_tvoc = lv_label_create(th);
     lv_obj_set_style_text_color(lbl_t_tvoc, lv_color_hex(COL_TEXT_DIM), 0);
     lv_obj_set_style_text_font(lbl_t_tvoc, &lv_font_montserrat_18, 0);
     lv_label_set_text(lbl_t_tvoc, "TVOC --");
-    lv_obj_align(lbl_t_tvoc, LV_ALIGN_BOTTOM_LEFT, 280, 0);
+    lv_obj_align(lbl_t_tvoc, LV_ALIGN_BOTTOM_LEFT, 280, 8);
 
     lbl_t_pressure = lv_label_create(th);
     lv_obj_set_style_text_color(lbl_t_pressure, lv_color_hex(COL_TEXT_DIM), 0);
     lv_obj_set_style_text_font(lbl_t_pressure, &lv_font_montserrat_18, 0);
     lv_label_set_text(lbl_t_pressure, "-- bar");
-    lv_obj_align(lbl_t_pressure, LV_ALIGN_BOTTOM_RIGHT, -12, 0);
+    lv_obj_align(lbl_t_pressure, LV_ALIGN_BOTTOM_RIGHT, -12, 8);
 
     /* CH-pressure warning banner. Sits on top of the Heater tile so the
        user can't miss it. EVENT_BUBBLE keeps the tile clickable through
