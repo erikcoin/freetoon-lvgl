@@ -206,6 +206,54 @@ static lv_obj_t * row_switch(lv_obj_t * row, int checked, lv_event_cb_t cb) {
     return sw;
 }
 
+/* ===================== on-screen keyboard for modals =====================
+ * The Toon registers only a touch indev, so no hardware/VNC keyboard ever
+ * reaches LVGL. Every textarea in these modals therefore needs a tappable
+ * keyboard. We keep one floating keyboard on the top layer that pops up when
+ * a textarea is tapped and hides on OK/close/defocus. modal_open() schedules
+ * settings_attach_kb_async() so it runs once the modal's textareas exist. */
+static lv_obj_t * g_kb = NULL;
+
+static void kb_hide(void) { if (g_kb) lv_obj_add_flag(g_kb, LV_OBJ_FLAG_HIDDEN); }
+
+static void kb_event(lv_event_t * e) {
+    lv_event_code_t c = lv_event_get_code(e);
+    if (c == LV_EVENT_READY || c == LV_EVENT_CANCEL) kb_hide();
+}
+static void ta_kb_event(lv_event_t * e) {
+    lv_event_code_t c = lv_event_get_code(e);
+    lv_obj_t * ta = lv_event_get_target(e);
+    if (c == LV_EVENT_FOCUSED || c == LV_EVENT_CLICKED) {
+        if (!g_kb) {
+            g_kb = lv_keyboard_create(lv_layer_top());
+            lv_obj_set_size(g_kb, LV_HOR_RES, 240);
+            lv_obj_align(g_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+            lv_obj_add_event_cb(g_kb, kb_event, LV_EVENT_ALL, NULL);
+        }
+        lv_keyboard_set_textarea(g_kb, ta);
+        lv_obj_clear_flag(g_kb, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(g_kb);
+    } else if (c == LV_EVENT_DEFOCUSED) {
+        kb_hide();
+    } else if (c == LV_EVENT_DELETE) {
+        /* Textarea (and its modal) going away — drop the dangling binding. */
+        if (g_kb && lv_keyboard_get_textarea(g_kb) == ta) {
+            lv_keyboard_set_textarea(g_kb, NULL);
+            kb_hide();
+        }
+    }
+}
+static void settings_attach_kb_tree(lv_obj_t * obj) {
+    uint32_t n = lv_obj_get_child_cnt(obj);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t * ch = lv_obj_get_child(obj, i);
+        if (lv_obj_check_type(ch, &lv_textarea_class))
+            lv_obj_add_event_cb(ch, ta_kb_event, LV_EVENT_ALL, NULL);
+        settings_attach_kb_tree(ch);
+    }
+}
+static void settings_attach_kb_async(void * panel) { settings_attach_kb_tree((lv_obj_t *)panel); }
+
 /* ============================ modal infra ============================ */
 
 static void modal_timer_cb(lv_timer_t * t) { (void)t; if (modal_tick_fn) modal_tick_fn(); }
@@ -263,6 +311,9 @@ static lv_obj_t * modal_open(const char * title, int panel_h) {
     lv_obj_set_style_text_color(xl, lv_color_hex(0xffffff), 0);
     lv_obj_center(xl);
 
+    /* After the caller fills this panel, wire a pop-up keyboard to every
+     * textarea it created (runs on the next LVGL tick). */
+    lv_async_call(settings_attach_kb_async, panel);
     return panel;
 }
 

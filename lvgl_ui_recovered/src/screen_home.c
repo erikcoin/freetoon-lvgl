@@ -2342,24 +2342,8 @@ lv_obj_t * screen_home_create(void) {
     lv_obj_add_flag(envelope_btn,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(envelope_badge, LV_OBJ_FLAG_HIDDEN);
 
-    /* Lights button — to the left of the gear. Same circle treatment as
-     * the gear; tap (or swipe-right anywhere on home) opens the Lights
-     * page. */
-    {
-        lv_obj_t * b = lv_btn_create(scr_root);
-        lv_obj_set_size(b, 44, 44);
-        lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -60, 4);
-        lv_obj_set_style_bg_color(b, lv_color_hex(0x4a3a18), 0);
-        lv_obj_set_style_radius(b, 22, 0);
-        lv_obj_set_ext_click_area(b, 14);
-        lv_obj_add_event_cb(b, on_home_gesture_to_lights,
-                            LV_EVENT_CLICKED, NULL);
-        lv_obj_t * l = lv_label_create(b);
-        lv_label_set_text(l, LV_SYMBOL_EYE_OPEN);   /* closest "bulb" glyph */
-        lv_obj_set_style_text_color(l, lv_color_hex(0xffcc44), 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
-        lv_obj_center(l);
-    }
+    /* (Old top-right lights button removed — superseded by the left-edge
+     * collapsible lights handle and the swipe-right gesture.) */
 
     /* freetoon logo badge — top-left corner, above the clock/date. Tap →
      * About / version / updates modal. */
