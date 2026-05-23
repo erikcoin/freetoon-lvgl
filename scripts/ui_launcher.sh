@@ -88,6 +88,30 @@ if [ ! -x "$TOONUI" ]; then
     exit 1
 fi
 
+# --- crash-loop guard: never strand a user in a broken UI ------------------
+# If toonui keeps exiting almost immediately (e.g. a first-time Toon 1 where
+# the binary/layout isn't happy and the picker never stays up to be tapped),
+# fall back to qt-gui so the device is always usable. A run that lasts longer
+# than FAIL_WINDOW resets the counter, so this only trips on a genuine fast
+# crash loop — not on a normal long session that later exits. State is two
+# fields "epoch count" so we don't depend on busybox `stat -c`.
+FAILF=/var/volatile/tmp/toonui_fails
+FAIL_WINDOW=120     # a run shorter than this counts as a crash
+FAIL_LIMIT=3        # this many fast crashes in a row → force qt-gui
+now=$(date +%s)
+last=0; fails=0
+[ -f "$FAILF" ] && read last fails < "$FAILF" 2>/dev/null || true
+[ -n "$last" ]  || last=0
+[ -n "$fails" ] || fails=0
+[ $((now - last)) -ge "$FAIL_WINDOW" ] && fails=0    # healthy gap → reset
+if [ "$fails" -ge "$FAIL_LIMIT" ] && [ -x "$QTGUI" ] && [ "$CHOICE" != "qt-gui" ]; then
+    log "toonui crash-looped ($fails fast exits) → forcing qt-gui fallback"
+    : > "$FAILF"     # reset so a later manual switch back to freetoon works
+    [ -r /etc/profile.d/qt-env.sh ] && . /etc/profile.d/qt-env.sh
+    exec "$QTGUI"
+fi
+echo "$now $((fails + 1))" > "$FAILF"   # record this attempt
+
 # Run the picker. It honours boot_picker_enabled in toonui.cfg internally
 # (skipping the 10 s screen when disabled) and just returns the rc that
 # matches the current ui_choice, so this dispatcher stays untouched.
