@@ -238,6 +238,23 @@ static int        update_minimized = 0;   /* dismissed → shown as an envelope 
 static int        install_pinned   = 0;   /* freeze the modal status line during install/result */
 static lv_obj_t * update_env_btn   = NULL; /* minimized-update envelope (top-right) */
 
+/* Live install-progress modal — tails /var/volatile/tmp/selfinstall.log for the
+ * @@STEP/@@FAIL markers the self-installer emits, so the user sees which step is
+ * running / done / failed instead of a blind "installing…". */
+#define UPD_STEP_COUNT 6
+static const char * const UPD_STEPS[UPD_STEP_COUNT] = {
+    "Nieuwste versie opzoeken",
+    "Binary downloaden",
+    "Download controleren",
+    "Helpers + assets",
+    "Binary plaatsen",
+    "UI herstarten",
+};
+static lv_obj_t  * upd_prog_modal = NULL;
+static lv_obj_t  * upd_prog_row[UPD_STEP_COUNT] = {0};
+static lv_obj_t  * upd_prog_msg   = NULL;
+static lv_timer_t * upd_prog_timer = NULL;
+
 /* Smaller tile widgets */
 static lv_obj_t * lbl_humid_val;       /* removed widget — kept as NULL for old refs */
 static lv_obj_t * lbl_energy_w;
@@ -442,8 +459,65 @@ static int update_already_installed(void) {
     return tn == bn && strncmp(t, BUILD_VERSION, tn) == 0;
 }
 
+#define UPD_LOG_PATH "/var/volatile/tmp/selfinstall.log"
+
+static void upd_prog_close(lv_event_t * e) {
+    (void)e;
+    if (upd_prog_timer) { lv_timer_del(upd_prog_timer); upd_prog_timer = NULL; }
+    if (upd_prog_modal) { lv_obj_del(upd_prog_modal); upd_prog_modal = NULL; }
+    for (int i = 0; i < UPD_STEP_COUNT; i++) upd_prog_row[i] = NULL;
+    upd_prog_msg = NULL;
+}
+
+/* Paint step i's row: done (✓) / active (►) / pending (·) / failed (✗). */
+static void upd_row_set(int i, const char * mark, lv_color_t col) {
+    if (!upd_prog_row[i]) return;
+    lv_label_set_text_fmt(upd_prog_row[i], "%s  %s", mark, UPD_STEPS[i]);
+    lv_obj_set_style_text_color(upd_prog_row[i], col, 0);
+}
+
+/* lv_timer (UI thread): re-read the small log each 400 ms — cheap, non-blocking
+ * (unlike a sensor read) — and reflect the latest @@STEP/@@FAIL in the rows. */
+static void upd_prog_tick(lv_timer_t * t) {
+    (void)t;
+    FILE * f = fopen(UPD_LOG_PATH, "r");
+    if (!f) return;
+    char line[256];
+    int cur = 0, failed = -1;
+    char failmsg[160] = "";
+    while (fgets(line, sizeof line, f)) {
+        int n;
+        if (sscanf(line, "@@STEP %d/", &n) == 1) { if (n > cur) cur = n; }
+        else if (strncmp(line, "@@FAIL ", 7) == 0) {
+            failed = cur > 0 ? cur : 1;
+            snprintf(failmsg, sizeof failmsg, "%s", line + 7);
+            size_t L = strlen(failmsg);
+            while (L && (failmsg[L-1] == '\n' || failmsg[L-1] == '\r')) failmsg[--L] = 0;
+        }
+    }
+    fclose(f);
+
+    for (int i = 0; i < UPD_STEP_COUNT; i++) {
+        if (failed > 0 && i == failed - 1)      upd_row_set(i, LV_SYMBOL_CLOSE, lv_color_hex(0xff5555));
+        else if (i < cur - 1)                   upd_row_set(i, LV_SYMBOL_OK,    lv_color_hex(0x66dd88));
+        else if (i == cur - 1 && cur > 0)       upd_row_set(i, LV_SYMBOL_RIGHT, lv_color_hex(0xffd24a));
+        else                                    upd_row_set(i, "-",             lv_color_hex(0x6b7c93));
+    }
+    if (upd_prog_msg) {
+        if (failed > 0)
+            lv_label_set_text_fmt(upd_prog_msg, "#ff7777 Mislukt bij stap %d:# %s",
+                                  failed, failmsg[0] ? failmsg : "(zie log)");
+        else if (cur >= UPD_STEP_COUNT)
+            lv_label_set_text(upd_prog_msg, "Herstarten... het scherm komt zo terug.");
+        else
+            lv_label_set_text(upd_prog_msg, "Bezig met installeren...");
+    }
+}
+
 /* Run the on-device self-installer detached, so it survives toonui being
- * killed mid-update (init respawns the new binary via ui_launcher). */
+ * killed mid-update (init respawns the new binary via ui_launcher), and open a
+ * live progress modal that tails the installer's @@STEP/@@FAIL markers so the
+ * user sees which step is running / done / failed. */
 static void do_install_now(lv_event_t * e) {
     (void)e;
     install_pinned = 1;   /* stop refresh_cb from overwriting the status line */
@@ -455,9 +529,60 @@ static void do_install_now(lv_event_t * e) {
     }
     if (about_status_lbl)
         lv_label_set_text(about_status_lbl, "Installing... the screen will restart shortly.");
-    system("nohup sh -c 'sleep 1; curl -fsSL "
+
+    if (!upd_prog_modal) {
+        upd_prog_modal = lv_obj_create(lv_scr_act());
+        lv_obj_remove_style_all(upd_prog_modal);
+        lv_obj_set_size(upd_prog_modal, 1024, 600);
+        lv_obj_set_style_bg_color(upd_prog_modal, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(upd_prog_modal, LV_OPA_70, 0);
+        lv_obj_add_flag(upd_prog_modal, LV_OBJ_FLAG_CLICKABLE);
+
+        lv_obj_t * card = lv_obj_create(upd_prog_modal);
+        lv_obj_set_size(card, 620, 460);
+        lv_obj_center(card);
+        lv_obj_set_style_bg_color(card, lv_color_hex(0x16243a), 0);
+        lv_obj_set_style_radius(card, 16, 0);
+        lv_obj_set_style_border_width(card, 0, 0);
+        lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+        lv_obj_t * h = lv_label_create(card);
+        lv_obj_set_style_text_font(h, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(h, lv_color_hex(0xffffff), 0);
+        lv_label_set_text(h, "Update installeren");
+        lv_obj_align(h, LV_ALIGN_TOP_LEFT, 24, 18);
+
+        for (int i = 0; i < UPD_STEP_COUNT; i++) {
+            upd_prog_row[i] = lv_label_create(card);
+            lv_obj_set_style_text_font(upd_prog_row[i], &lv_font_montserrat_20, 0);
+            lv_obj_align(upd_prog_row[i], LV_ALIGN_TOP_LEFT, 28, 70 + i * 38);
+            upd_row_set(i, "-", lv_color_hex(0x6b7c93));
+        }
+
+        upd_prog_msg = lv_label_create(card);
+        lv_obj_set_style_text_font(upd_prog_msg, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(upd_prog_msg, lv_color_hex(0xcdd9e6), 0);
+        lv_label_set_recolor(upd_prog_msg, true);
+        lv_label_set_long_mode(upd_prog_msg, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(upd_prog_msg, 560);
+        lv_obj_align(upd_prog_msg, LV_ALIGN_TOP_LEFT, 28, 70 + UPD_STEP_COUNT * 38 + 6);
+        lv_label_set_text(upd_prog_msg, "Bezig met installeren...");
+
+        lv_obj_t * x = lv_btn_create(card);
+        lv_obj_set_size(x, 130, 46);
+        lv_obj_align(x, LV_ALIGN_BOTTOM_RIGHT, -16, -12);
+        lv_obj_add_event_cb(x, upd_prog_close, LV_EVENT_CLICKED, NULL);
+        lv_obj_t * xl = lv_label_create(x); lv_label_set_text(xl, "Sluiten"); lv_obj_center(xl);
+    }
+
+    /* Truncate the log so the modal starts from this run's markers, then fire
+       the installer detached. */
+    system("nohup sh -c ': > " UPD_LOG_PATH "; sleep 1; curl -fsSL "
            "https://raw.githubusercontent.com/Ierlandfan/freetoon-lvgl/main/scripts/toon-selfinstall.sh "
-           "| sh' >/var/volatile/tmp/selfinstall.log 2>&1 &");
+           "| sh' >> " UPD_LOG_PATH " 2>&1 &");
+
+    if (!upd_prog_timer)
+        upd_prog_timer = lv_timer_create(upd_prog_tick, 400, NULL);
 }
 
 /* Skip this version — suppress the banner until a newer release appears. */

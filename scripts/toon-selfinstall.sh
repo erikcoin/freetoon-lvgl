@@ -19,14 +19,24 @@ mkdir -p "$TMP"
 
 say() { echo "[freetoon] $*"; }
 
+# Machine-readable progress markers parsed by toonui's update modal so the GUI
+# can show which of the 6 steps is running / done / failed. Harmless extra log
+# lines for a manual run or an older toonui. STEP_TOTAL must match the toonui
+# side (screen_home.c UPD_STEPS[]).
+STEP_TOTAL=6
+step() { echo "@@STEP $1/$STEP_TOTAL $2"; }
+fail() { echo "@@FAIL $*"; }
+
 # Resolve the newest release tag INCLUDING prereleases — all freetoon releases
 # are beta (prerelease), so /releases/latest would skip them. per_page=1 gives
 # the single newest release; grep the first tag_name.
+step 1 "Nieuwste versie opzoeken"
 say "resolving latest release"
 TAG=$(curl -fsSL --connect-timeout 8 --max-time 30 \
         "https://api.github.com/repos/$REPO/releases?per_page=1" 2>/dev/null \
       | grep -m1 '"tag_name"' | sed 's/.*"tag_name"[^"]*"\([^"]*\)".*/\1/')
 if [ -z "$TAG" ]; then
+    fail "kon release niet ophalen (geen internet?)"
     say "ERROR: could not resolve latest release tag (no internet?)."
     rm -rf "$TMP"; exit 1
 fi
@@ -50,13 +60,21 @@ say "device binary asset: $BIN_ASSET"
 
 # 1) toonui binary (required) — sanity-check the size (a GitHub error page or
 # truncated download is tiny; the real binary is ~1 MB). busybox-safe.
-dl "$BIN_ASSET" "$TMP/toonui"
+step 2 "Binary downloaden ($BIN_ASSET)"
+if ! dl "$BIN_ASSET" "$TMP/toonui"; then
+    fail "download van $BIN_ASSET mislukt"
+    say "ERROR: download of $BIN_ASSET failed."
+    rm -rf "$TMP"; exit 1
+fi
+step 3 "Download controleren"
 SZ=$(wc -c < "$TMP/toonui" 2>/dev/null || echo 0)
 if [ "$SZ" -lt 500000 ]; then
+    fail "download te klein ($SZ bytes) — afgebroken"
     say "ERROR: toonui download too small ($SZ bytes) — aborting."
     rm -rf "$TMP"; exit 1
 fi
 
+step 4 "Helpers + assets installeren"
 # 2) helper scripts — always refresh. These are freetoon's own plumbing
 # (launcher, VNC, OT-mode, companion gate); they ship bug fixes (e.g. the
 # framebuffer-offset VNC fix, the firewall port-open), so a re-run of the
@@ -134,6 +152,7 @@ for p in 10081 5900; do
     fi
 done
 
+step 5 "Binary plaatsen"
 # 3) swap the binary (back up the old one).
 [ -f "$DEST/toonui" ] && cp "$DEST/toonui" "$DEST/toonui.bak"
 cp "$TMP/toonui" "$DEST/toonui"
@@ -222,6 +241,7 @@ fi
 
 # 5) restart the UI: stop any stock qt-gui AND the old toonui so init respawns
 # through ui_launcher (single owner of the framebuffer).
+step 6 "UI herstarten"
 say "restarting UI"
 pkill -x qt-gui 2>/dev/null || true
 kill "$(pidof toonui 2>/dev/null)" 2>/dev/null || pkill -x toonui 2>/dev/null || true
