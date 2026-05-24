@@ -1170,7 +1170,14 @@ static void refresh_cb(lv_timer_t * t) {
     /* News ticker text — rebuild only when the lead headline changes (every
      * ~15 min) so the scroll animation isn't reset each second. */
     if (news_ticker) {
-        if (settings.news_enabled && news_count() > 0 && home_tile_page == 0) {
+        /* In custom layout the ticker can be hidden via the layout — don't let
+         * the text refresh re-show it. */
+        int layout_hides_ticker = 0;
+        if (settings.custom_layout_enabled) {
+            const layout_tile_t * L = layout_find(LT_NEWS_TICKER);
+            layout_hides_ticker = (!L || !L->visible);
+        }
+        if (settings.news_enabled && news_count() > 0 && home_tile_page == 0 && !layout_hides_ticker) {
             lv_obj_clear_flag(news_ticker, LV_OBJ_FLAG_HIDDEN);
             static char last_first[NEWS_TITLE_MAX] = "";
             char t0[NEWS_TITLE_MAX], l0[NEWS_LINK_MAX];
@@ -3243,6 +3250,19 @@ lv_obj_t * screen_home_create(void) {
     lv_obj_clear_flag(forecast_box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(forecast_box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(forecast_box, open_forecast, LV_EVENT_CLICKED, NULL);
+
+    /* Custom layout can hide the ticker and/or the forecast strip (the ticker's
+     * per-page show is also guarded in home_show_page; this covers the initial
+     * state + the forecast, which isn't page-toggled). Position stays native. */
+    if (settings.custom_layout_enabled) {
+        const layout_tile_t * Lt = layout_find(LT_NEWS_TICKER);
+        if (news_ticker && (!Lt || !Lt->visible)) lv_obj_add_flag(news_ticker, LV_OBJ_FLAG_HIDDEN);
+        const layout_tile_t * Lf = layout_find(LT_FORECAST);
+        if (!Lf || !Lf->visible) {
+            lv_obj_add_flag(forecast_box, LV_OBJ_FLAG_HIDDEN);
+            if (lbl_forecast_city) lv_obj_add_flag(lbl_forecast_city, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     {
         int col_w = 1004 / WEATHER_FORECAST_DAYS;
         for (int i = 0; i < WEATHER_FORECAST_DAYS; i++) {
