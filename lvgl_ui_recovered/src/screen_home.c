@@ -18,6 +18,7 @@
 #include "homeassistant.h"
 #include "client_link.h"
 #include "news.h"
+#include "calendar.h"
 #include "packages.h"
 #include "tile_slots.h"
 #include "layout.h"
@@ -206,6 +207,9 @@ static lv_obj_t * tile_vent     = NULL;
 static lv_obj_t * tile_energy   = NULL;
 static lv_obj_t * tile_waste    = NULL;
 static lv_obj_t * tile_curtains = NULL;
+/* Custom-layout-only info tiles (content labels; NULL unless created). */
+static lv_obj_t * tile_news_sum_lbl = NULL;
+static lv_obj_t * tile_cal_lbl      = NULL;
 
 /* Swipeable tile pages. The five built-in tiles (Waste/Energy/Vent/Family/
  * Water) are "page 0". Swiping left in the tile zone reveals page 1 — an
@@ -1108,6 +1112,31 @@ static void refresh_cb(lv_timer_t * t) {
      * them (e.g. the Family/Life360 tile) bleed through behind the page-2
      * swipe slots. */
     if (home_tile_page == 0) apply_offline_tile_visibility();
+
+    /* Custom-layout info tiles — fill from cached state (no I/O). */
+    if (tile_news_sum_lbl) {
+        char buf[512] = ""; int nn = news_count(); if (nn > 4) nn = 4;
+        for (int i = 0; i < nn; i++) {
+            char ti[120];
+            if (news_item(i, ti, sizeof ti, NULL, 0) != 0) continue;
+            strncat(buf, "\xE2\x80\xA2 ", sizeof buf - strlen(buf) - 1);   /* bullet */
+            strncat(buf, ti, sizeof buf - strlen(buf) - 1);
+            strncat(buf, "\n", sizeof buf - strlen(buf) - 1);
+        }
+        lv_label_set_text(tile_news_sum_lbl, buf[0] ? buf : "Geen nieuws");
+    }
+    if (tile_cal_lbl) {
+        char buf[512] = ""; int nn = calendar_state.count; if (nn > 5) nn = 5;
+        for (int i = 0; i < nn; i++) {
+            calendar_event_t * ev = &calendar_state.ev[i];
+            char line[160];
+            snprintf(line, sizeof line, "%s %s %s\n",
+                     ev->date + 5, ev->time[0] ? ev->time : "", ev->summary);   /* MM-DD */
+            strncat(buf, line, sizeof buf - strlen(buf) - 1);
+        }
+        lv_label_set_text(tile_cal_lbl, buf[0] ? buf :
+            (settings.calendar_enabled ? "Geen afspraken" : "Agenda uit"));
+    }
 
     /* Marketplace tile overrides — if a slot is bound, render the
      * integration's data into the matching tile's labels and remember
@@ -2489,6 +2518,18 @@ lv_obj_t * screen_home_create(void) {
     lv_obj_t * th = lv_obj_create(scr_root);
     lv_obj_set_size(th, 520, 360);   /* bottom flush with the curtains/right column */
     lv_obj_set_pos(th, 20, 20);
+    /* Custom layout: move/hide the thermostat block from the grid. Position
+     * only — its internals are absolutely positioned, so keep the native size
+     * (the editor treats it as move/hide, not resize). */
+    if (settings.custom_layout_enabled) {
+        const layout_tile_t * L = layout_find(LT_THERMOSTAT);
+        if (L && L->visible) { int x, y, w, h;
+            layout_cell_px(L->col, L->row, L->w, L->h, &x, &y, &w, &h);
+            lv_obj_set_pos(th, x, y);
+        } else if (L) {
+            lv_obj_add_flag(th, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     lv_obj_set_style_bg_color(th, lv_color_hex(COL_TILE_BG), 0);
     lv_obj_set_style_border_width(th, 0, 0);
     lv_obj_set_style_radius(th, 18, 0);
@@ -2973,6 +3014,30 @@ lv_obj_t * screen_home_create(void) {
 
     tile_t water_t;
     make_tile(scr_root, 790, 300, 214, 130, LT_WATER, "Water", 0x44aaff, open_placeholder, &water_t);
+
+    /* Custom-layout-only tiles: a news-summary panel and a calendar/agenda tile.
+     * Created only in custom layout mode (make_tile positions/hides them from
+     * the grid); content is filled in refresh_cb. */
+    if (settings.custom_layout_enabled) {
+        tile_t nt, ct;
+        make_tile(scr_root, 0, 0, 200, 150, LT_NEWS_SUMMARY, "Nieuws", 0x6666aa, NULL, &nt);
+        tile_news_sum_lbl = lv_label_create(nt.tile);
+        lv_obj_set_style_text_color(tile_news_sum_lbl, lv_color_hex(COL_TEXT_HI), 0);
+        lv_obj_set_style_text_font(tile_news_sum_lbl, &lv_font_montserrat_14, 0);
+        lv_label_set_long_mode(tile_news_sum_lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(tile_news_sum_lbl, LV_PCT(94));
+        lv_obj_align(tile_news_sum_lbl, LV_ALIGN_TOP_LEFT, 0, 38);
+        lv_label_set_text(tile_news_sum_lbl, "...");
+
+        make_tile(scr_root, 0, 0, 200, 150, LT_CALENDAR, "Agenda", 0x4477cc, NULL, &ct);
+        tile_cal_lbl = lv_label_create(ct.tile);
+        lv_obj_set_style_text_color(tile_cal_lbl, lv_color_hex(COL_TEXT_HI), 0);
+        lv_obj_set_style_text_font(tile_cal_lbl, &lv_font_montserrat_14, 0);
+        lv_label_set_long_mode(tile_cal_lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(tile_cal_lbl, LV_PCT(94));
+        lv_obj_align(tile_cal_lbl, LV_ALIGN_TOP_LEFT, 0, 38);
+        lv_label_set_text(tile_cal_lbl, "...");
+    }
     tile_water = water_t.tile;
 
     /* Long-press on any of the four right-column tiles → tile-slots picker.
