@@ -1,6 +1,8 @@
 #ifndef TOON_HOMEASSISTANT_H
 #define TOON_HOMEASSISTANT_H
 
+#include <stddef.h>   /* size_t (ha_fetch_calendar) */
+
 /* Thin HTTP client for talking to Home Assistant via REST.
  * Auth is a Long-Lived Access Token read from /mnt/data/ha.cfg
  * (single line: just the token).
@@ -72,5 +74,10 @@ void ha_curtain_stop_async(void);
 void ha_light_toggle_async(const char * entity_id);
 void ha_lights_all_on_async(void);
 void ha_lights_all_off_async(void);
+
+/* GET /api/calendars/<entity>?start=&end= (Bearer auth) → HA event-array JSON
+ * into `out`. Returns 0 on success. Used by calendar.c. */
+int ha_fetch_calendar(const char * entity, const char * start_iso,
+                      const char * end_iso, char * out, size_t out_max);
 
 #endif

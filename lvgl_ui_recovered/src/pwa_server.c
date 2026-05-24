@@ -735,6 +735,7 @@ static int handle_settings_get(int fd) {
         "\"p1_elec_host\":\"%s\",\"p1_water_host\":\"%s\",\"vent_host\":\"%s\",\"opnsense_host\":\"%s\","
         "\"energy_source\":%d,\"auto_update_enabled\":%d,\"auto_update_hour\":%d,"
         "\"news_enabled\":%d,\"news_rss_url\":\"%s\",\"news_scroll_speed\":%d,"
+        "\"calendar_enabled\":%d,\"calendar_ha_entity\":\"%s\",\"calendar_ics_url\":\"%s\","
         "\"tile_rotate_enabled\":%d,\"tile_rotate_seconds\":%d,\"tile_rotate_members\":\"%s\","
         "\"client_mode\":%d,\"master_host\":\"%s\""
         "}",
@@ -761,6 +762,7 @@ static int handle_settings_get(int fd) {
         settings.p1_elec_host, settings.p1_water_host, settings.vent_host, settings.opnsense_host,
         settings.energy_source, settings.auto_update_enabled, settings.auto_update_hour,
         settings.news_enabled, settings.news_rss_url, settings.news_scroll_speed,
+        settings.calendar_enabled, settings.calendar_ha_entity, settings.calendar_ics_url,
         settings.tile_rotate_enabled, settings.tile_rotate_seconds, settings.tile_rotate_members,
         settings.client_mode, settings.master_host);
     char hdr[160];
@@ -886,6 +888,13 @@ static int handle_settings_post(int fd, const char * body) {
     if (extract_int(body, "news_enabled", &iv))       settings.news_enabled = !!iv;
     if (extract_str(body, "news_rss_url", sv, sizeof sv))
         snprintf(settings.news_rss_url, sizeof settings.news_rss_url, "%s", sv);
+    int cal_touched = 0;
+    if (extract_int(body, "calendar_enabled", &iv)) { settings.calendar_enabled = !!iv; cal_touched = 1; }
+    if (extract_str(body, "calendar_ha_entity", sv, sizeof sv)) {
+        snprintf(settings.calendar_ha_entity, sizeof settings.calendar_ha_entity, "%s", sv); cal_touched = 1; }
+    if (extract_str(body, "calendar_ics_url", sv, sizeof sv)) {
+        snprintf(settings.calendar_ics_url, sizeof settings.calendar_ics_url, "%s", sv); cal_touched = 1; }
+    if (cal_touched) { extern void calendar_refresh_async(void); calendar_refresh_async(); }
     if (extract_int(body, "news_scroll_speed", &iv)) settings.news_scroll_speed = (iv > 0 && iv < 30) ? 30 : (iv > 150 ? 150 : iv);
     /* Tile auto-rotate */
     if (extract_int(body, "tile_rotate_enabled", &iv))settings.tile_rotate_enabled = !!iv;
@@ -963,6 +972,9 @@ static const char SETTINGS_HTML[] =
 "['Newsreader','h'],"
 "['news_enabled','News ticker','b'],['news_rss_url','RSS feed URL','t'],"
 "['news_scroll_speed','News ticker speed (px/s, 30-150)','n'],"
+"['Calendar','h'],"
+"['calendar_enabled','Agenda enabled','b'],['calendar_ha_entity','HA calendar entity (calendar.x)','t'],"
+"['calendar_ics_url','iCal (.ics) URL','t'],"
 "['Tile auto-rotate','h'],"
 "['tile_rotate_enabled','Rotate a tile','b'],['tile_rotate_seconds','Rotate every (s)','n'],"
 "['tile_rotate_members','Rotate members (id1,id2,..)','t'],"
@@ -980,7 +992,8 @@ static const char SETTINGS_HTML[] =
 "function ico(n){var m={'Display':'\\uD83D\\uDDA5\\uFE0F','Weather':'\\u2601\\uFE0F',"
 "'Heating':'\\uD83D\\uDD25','MQTT':'\\uD83D\\uDCE1','Integrations':'\\uD83D\\uDD0C',"
 "'Home Assistant':'\\uD83C\\uDFE0','Domoticz':'\\uD83D\\uDCA1','Newsreader':'\\uD83D\\uDCF0',"
-"'Tile auto-rotate':'\\uD83D\\uDD01','Updates':'\\u2B07\\uFE0F','Display options':'\\u2699\\uFE0F'};"
+"'Tile auto-rotate':'\\uD83D\\uDD01','Updates':'\\u2B07\\uFE0F','Display options':'\\u2699\\uFE0F',"
+"'Calendar':'\\uD83D\\uDCC5'};"
 "return m[n]||'\\u2699\\uFE0F';}"
 "function rowHtml(s){var k=s[0],lbl=s[1],t=s[2],v=S[k];var inp;"
 "if(t=='U')return '<div class=r><button type=button onclick=doUpd() id=updbtn>Update now</button>"

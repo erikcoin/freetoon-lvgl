@@ -113,6 +113,28 @@ static int ha_get_state(const char * entity_id, char * out, size_t out_max) {
     return (rc == 0 && n > 0) ? 0 : -1;
 }
 
+/* GET /api/calendars/<entity>?start=&end= with Bearer auth — fills `out` with
+ * HA's JSON event array. Public so calendar.c can pull HA events without
+ * duplicating the token plumbing. Lazy-loads the token if the HA thread hasn't
+ * yet. Returns 0 on success. */
+int ha_fetch_calendar(const char * entity, const char * start_iso,
+                      const char * end_iso, char * out, size_t out_max) {
+    if (!g_token[0]) load_token();
+    if (!g_token[0] || !entity || !entity[0] || !HA_HOST[0]) return -1;
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "/usr/bin/curl -s --max-time 8 --connect-timeout 4 "
+        "-H 'Authorization: Bearer %s' "
+        "'http://%s/api/calendars/%s?start=%s&end=%s' 2>/dev/null",
+        g_token, HA_HOST, entity, start_iso, end_iso);
+    FILE * p = popen(cmd, "r");
+    if (!p) return -1;
+    size_t n = fread(out, 1, out_max - 1, p);
+    out[n] = 0;
+    int rc = pclose(p);
+    return (rc == 0 && n > 0) ? 0 : -1;
+}
+
 /* POST /api/services/cover/<action>. Returns 0 on HTTP 2xx.
  * On failure, also fires a Toon-side notification so the user knows the
  * curtain button didn't actually do anything (cleared once HA recovers). */

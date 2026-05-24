@@ -69,6 +69,9 @@ settings_t settings = {
     .news_enabled        = 0,
     .news_rss_url        = "https://feeds.nos.nl/nosnieuwsalgemeen",
     .news_scroll_speed   = 30,
+    .calendar_enabled    = 0,
+    .calendar_ha_entity  = "",
+    .calendar_ics_url    = "",
     .auto_update_enabled = 0,
     .auto_update_hour    = 2,
     .ha_host             = "",
@@ -227,6 +230,9 @@ void settings_load(void) {
             for (char * p = settings.news_rss_url; *p; p++) if (*p == '\t') *p = '\n';
         }
         else if (strcmp(k, "news_scroll_speed") == 0) settings.news_scroll_speed = (iv > 0 && iv < 30) ? 30 : (iv > 150 ? 150 : iv);
+        else if (strcmp(k, "calendar_enabled")   == 0) settings.calendar_enabled = iv;
+        else if (strcmp(k, "calendar_ha_entity") == 0) snprintf(settings.calendar_ha_entity, sizeof settings.calendar_ha_entity, "%s", v);
+        else if (strcmp(k, "calendar_ics_url")   == 0) snprintf(settings.calendar_ics_url, sizeof settings.calendar_ics_url, "%s", v);
         else if (strcmp(k, "auto_update_enabled") == 0) settings.auto_update_enabled = iv;
         else if (strcmp(k, "auto_update_hour")    == 0) settings.auto_update_hour = (iv < 0 || iv > 23) ? 2 : iv;
         else if (strcmp(k, "ha_host")          == 0) snprintf(settings.ha_host, sizeof settings.ha_host, "%s", v);
@@ -391,6 +397,9 @@ void settings_save(void) {
         for (char * p = news_enc; *p; p++) if (*p == '\n') *p = '\t';
         fprintf(f, "news_rss_url=%s\n", news_enc);
     }
+    fprintf(f, "calendar_enabled=%d\n", settings.calendar_enabled);
+    fprintf(f, "calendar_ha_entity=%s\n", settings.calendar_ha_entity);
+    fprintf(f, "calendar_ics_url=%s\n", settings.calendar_ics_url);
     fprintf(f, "news_scroll_speed=%d\n", settings.news_scroll_speed);
     fprintf(f, "auto_update_enabled=%d\n", settings.auto_update_enabled);
     fprintf(f, "auto_update_hour=%d\n", settings.auto_update_hour);

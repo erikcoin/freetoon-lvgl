@@ -17,6 +17,7 @@
 #include "screens.h"
 #include "settings.h"
 #include "domoticz.h"
+#include "calendar.h"
 #include "weather.h"
 #include "backlight.h"
 #include "boxtalk.h"
@@ -1458,6 +1459,76 @@ static void on_news_speed_change(lv_event_t * e) {
     settings.news_scroll_speed = v;
     if (lbl_news_speed) lv_label_set_text_fmt(lbl_news_speed, "%d", v);
     screen_home_set_ticker_speed(v);   /* live */
+}
+
+/* ---- Calendar (agenda): enable + HA entity + iCal URL + open-agenda. ---- */
+static lv_obj_t * sw_cal = NULL;
+static lv_obj_t * ta_cal_ha = NULL;
+static lv_obj_t * ta_cal_ics = NULL;
+static void on_cal_enabled_change(lv_event_t * e) {
+    settings.calendar_enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0;
+}
+static void on_cal_open_click(lv_event_t * e) { (void)e; screen_calendar_show(); }
+static void on_cal_save_click(lv_event_t * e) {
+    (void)e;
+    if (ta_cal_ha) { const char * v = lv_textarea_get_text(ta_cal_ha);
+        snprintf(settings.calendar_ha_entity, sizeof settings.calendar_ha_entity, "%s", v ? v : ""); }
+    if (ta_cal_ics) { const char * v = lv_textarea_get_text(ta_cal_ics);
+        snprintf(settings.calendar_ics_url, sizeof settings.calendar_ics_url, "%s", v ? v : ""); }
+    settings_save();
+    calendar_refresh_async();          /* off-thread fetch so the UI stays responsive */
+}
+static void open_calendar_modal(lv_event_t * e) {
+    (void)e;
+    lv_obj_t * p = modal_open("Agenda", 560);
+    lv_obj_add_flag(p, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(p, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(p, LV_SCROLLBAR_MODE_AUTO);
+    int y = 70;
+
+    lv_obj_t * r = panel_row(p, y, "Agenda inschakelen", NULL);
+    sw_cal = row_switch(r, settings.calendar_enabled, on_cal_enabled_change);
+    y += 90;
+
+    lv_obj_t * l1 = lv_label_create(p);
+    lv_obj_set_style_text_color(l1, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(l1, &lv_font_montserrat_18, 0);
+    lv_label_set_text(l1, "Home Assistant agenda-entiteit (optioneel):");
+    lv_obj_align(l1, LV_ALIGN_TOP_LEFT, 4, y); y += 30;
+    ta_cal_ha = lv_textarea_create(p);
+    lv_obj_set_size(ta_cal_ha, 470, 44);
+    lv_obj_align(ta_cal_ha, LV_ALIGN_TOP_LEFT, 4, y);
+    lv_textarea_set_one_line(ta_cal_ha, true);
+    lv_textarea_set_placeholder_text(ta_cal_ha, "calendar.gezin");
+    lv_textarea_set_text(ta_cal_ha, settings.calendar_ha_entity);
+    y += 60;
+
+    lv_obj_t * l2 = lv_label_create(p);
+    lv_obj_set_style_text_color(l2, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(l2, &lv_font_montserrat_18, 0);
+    lv_label_set_text(l2, "iCal (.ics) URL (optioneel):");
+    lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 4, y); y += 30;
+    ta_cal_ics = lv_textarea_create(p);
+    lv_obj_set_size(ta_cal_ics, 470, 44);
+    lv_obj_align(ta_cal_ics, LV_ALIGN_TOP_LEFT, 4, y);
+    lv_textarea_set_one_line(ta_cal_ics, true);
+    lv_textarea_set_placeholder_text(ta_cal_ics, "https://… .ics");
+    lv_textarea_set_text(ta_cal_ics, settings.calendar_ics_url);
+    y += 60;
+
+    lv_obj_t * saveb = lv_btn_create(p);
+    lv_obj_set_size(saveb, 150, 46);
+    lv_obj_align(saveb, LV_ALIGN_TOP_LEFT, 4, y);
+    lv_obj_set_style_bg_color(saveb, lv_color_hex(0x2e6e3a), 0);
+    lv_obj_add_event_cb(saveb, on_cal_save_click, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * sl = lv_label_create(saveb); lv_label_set_text(sl, "Opslaan"); lv_obj_center(sl);
+
+    lv_obj_t * openb = lv_btn_create(p);
+    lv_obj_set_size(openb, 180, 46);
+    lv_obj_align(openb, LV_ALIGN_TOP_LEFT, 170, y);
+    lv_obj_set_style_bg_color(openb, lv_color_hex(0x2a4060), 0);
+    lv_obj_add_event_cb(openb, on_cal_open_click, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * ol = lv_label_create(openb); lv_label_set_text(ol, "Agenda openen"); lv_obj_center(ol);
 }
 
 static void open_news_modal(lv_event_t * e) {
@@ -2921,6 +2992,8 @@ lv_obj_t * screen_settings_create(void) {
               "cycle a tile's content", open_rotate_modal); n++;
     make_tile(GX(n), GY(n), NULL, LV_SYMBOL_LIST, "Newsreader",
               "RSS headlines ticker", open_news_modal); n++;
+    make_tile(GX(n), GY(n), NULL, LV_SYMBOL_LIST, "Agenda",
+              "HA + iCal events", open_calendar_modal); n++;
     make_tile(GX(n), GY(n), NULL, LV_SYMBOL_REFRESH, "Restart UI",
               "reload settings", open_restart_confirm); n++;
     #undef GX

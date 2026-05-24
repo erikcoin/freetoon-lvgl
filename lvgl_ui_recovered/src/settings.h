@@ -195,6 +195,14 @@ typedef struct {
     char news_rss_url[640];    /* one or more RSS feed URLs, newline-separated */
     int  news_scroll_speed;   /* ticker scroll speed, px/sec (0 → default 30) */
 
+    /* Calendar — upcoming-events agenda. Two optional sources, merged + sorted:
+     *  - calendar_ha_entity: a Home Assistant calendar.* entity (REST, Bearer)
+     *  - calendar_ics_url:   a public/private .ics URL (CalDAV/Google/etc.)
+     * Either or both; empty disables that source. */
+    int  calendar_enabled;
+    char calendar_ha_entity[64];
+    char calendar_ics_url[256];
+
     /* Client mode — this Toon is a "slave" that mirrors a master Toon over
      * its PWA HTTP API instead of talking to local HCB daemons. When 1, all
      * local integrations (BoxTalk, P1, meteradapter, weather, waste, vent,
