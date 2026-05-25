@@ -186,11 +186,12 @@ static int reflow_pushdown(layout_t * L, int moved) {
     /* Order the OTHER visible page-0 tiles top-to-bottom (then left-to-right):
      * we settle them in that order so higher tiles keep priority and lower ones
      * are the ones that get shoved down. */
+    int pg = L->tiles[moved].page;     /* reflow only within the moved tile's page */
     int idx[LAYOUT_MAX_TILES], n = 0;
     for (int i = 0; i < L->count; i++) {
         if (i == moved) continue;
         const layout_tile_t * t = &L->tiles[i];
-        if (t->page != 0 || !t->visible) continue;
+        if (t->page != pg || !t->visible) continue;
         idx[n++] = i;
     }
     for (int a = 0; a < n; a++)
@@ -229,7 +230,7 @@ static int reflow_pushdown(layout_t * L, int moved) {
             for (int j = 0; j < L->count && !hit; j++) {
                 if (j == idx[k]) continue;
                 const layout_tile_t * o = &L->tiles[j];
-                if (o->page != 0 || !o->visible) continue;
+                if (o->page != pg || !o->visible) continue;
                 hit = rect_hits(t->col, rr, t->w, t->h, o);
             }
             if (hit) break;
@@ -248,6 +249,7 @@ static int reflow_firstfit(layout_t * L, int moved) {
     char occ[LAYOUT_ROWS][LAYOUT_COLS];
     memset(occ, 0, sizeof occ);
     layout_tile_t * m = &L->tiles[moved];
+    int pg = m->page;                  /* re-pack only within the moved tile's page */
     if (m->col < 0 || m->row < 0 ||
         m->col + m->w > LAYOUT_COLS || m->row + m->h > LAYOUT_ROWS) return 0;
     for (int r = m->row; r < m->row + m->h; r++)
@@ -258,7 +260,7 @@ static int reflow_firstfit(layout_t * L, int moved) {
     for (int i = 0; i < L->count; i++) {
         if (i == moved) continue;
         layout_tile_t * t = &L->tiles[i];
-        if (t->page != 0 || !t->visible) continue;
+        if (t->page != pg || !t->visible) continue;
         int hit = 0;
         for (int r = t->row; r < t->row + t->h && !hit; r++)
             for (int c = t->col; c < t->col + t->w; c++) if (occ[r][c]) { hit = 1; break; }
