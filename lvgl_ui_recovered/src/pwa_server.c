@@ -179,7 +179,10 @@ static int emit_wx_day(char * p, char * end, const weather_day_t * d) {
 static int render_state_json(char * body, size_t sz) {
     char * p = body;
     char * end = body + sz;
-    char esc[256];                          /* scratch for JSON-escaped strings */
+    /* Scratch for JSON-escaped strings: largest STATE_STR field is the
+     * Buienradar weather-report body at weather_state.weatherreport_text
+     * (sizeof 2400), so we size for it with headroom. */
+    char esc[3072];
     (void)esc;                              /* may go unused if no STATE_STR fires */
 
     if (p < end) *p++ = '{';
@@ -429,6 +432,29 @@ static int handle_state(int fd) {
 /* SSE stream — emits a `data: {…}` event whenever the JSON snapshot changes,
  * plus a `: keepalive\n\n` comment every ~10s so proxies don't drop the conn.
  * Loops until the client disconnects (sock_send_all returns -1). */
+/* Serve the cached Buienradar radar GIF the weather thread writes to
+ * /tmp/toonui_radar.gif. The WASM client's JS shim fetches this on boot
+ * and on a refresh interval, dropping the bytes into Emscripten's MEMFS so
+ * the forecast screen's lv_gif_set_src("S:/tmp/toonui_radar.gif") binds. */
+static int handle_radar_gif(int fd) {
+    const char * path = "/tmp/toonui_radar.gif";
+    struct stat st;
+    if (stat(path, &st) != 0) return send_status(fd, 404, "Not Found", "no");
+    FILE * f = fopen(path, "rb");
+    if (!f) return send_status(fd, 404, "Not Found", "no");
+    char hdr[256];
+    int n = snprintf(hdr, sizeof hdr,
+        "HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nContent-Length: %lld\r\n"
+        "Cache-Control: no-cache\r\nConnection: close\r\n"
+        "Access-Control-Allow-Origin: *\r\n\r\n",
+        (long long)st.st_size);
+    if (sock_send_all(fd, hdr, n) < 0) { fclose(f); return -1; }
+    char buf[4096]; size_t r;
+    while ((r = fread(buf, 1, sizeof buf, f)) > 0)
+        if (sock_send_all(fd, buf, r) < 0) { fclose(f); return -1; }
+    fclose(f); return 0;
+}
+
 static int handle_state_stream(int fd) {
     const char * hdr =
         "HTTP/1.1 200 OK\r\n"
@@ -1434,6 +1460,7 @@ static int dispatch(int fd, char * req) {
     if (!strcmp(method, "GET")) {
         if (!strcmp(path, "/api/state"))         return handle_state(fd);
         if (!strcmp(path, "/api/state/stream"))  return handle_state_stream(fd);
+        if (!strcmp(path, "/api/radar.gif"))     return handle_radar_gif(fd);
         if (!strcmp(path, "/api/packages"))      return handle_packages_get(fd);
         if (!strcmp(path, "/api/schedule"))      return handle_schedule_get(fd);
         if (!strcmp(path, "/api/settings"))      return handle_settings_get(fd);

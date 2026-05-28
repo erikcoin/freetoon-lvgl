@@ -104,3 +104,9 @@ STATE_STR(weather_state, current_desc,      wx_current_desc)
 STATE_STR(weather_state, current_icon,      wx_current_icon)
 STATE_INT(weather_state, day_count,         wx_day_count)
 STATE_INT(weather_state, hour_count,        wx_hour_count)
+/* Buienradar "weerverwachting" — title is short, body is up to ~2400 chars
+ * of Dutch forecast prose. Newlines get squashed to spaces by json_strcpy;
+ * the forecast screen wraps the resulting paragraph naturally. */
+STATE_STR(weather_state, weatherreport_title, wx_report_title)
+STATE_STR(weather_state, weatherreport_text,  wx_report_text)
+STATE_STR(weather_state, radar_url,           wx_radar_url)

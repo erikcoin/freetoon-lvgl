@@ -23,8 +23,12 @@
                       overflow: hidden; touch-action: none; }
         #canvas { display: block; width: 100vw; height: 100vh;
                   image-rendering: pixelated; outline: none; }
-        #status { position: fixed; left: 8px; top: 8px; color: #888;
-                  font: 12px/1.2 system-ui, sans-serif; pointer-events: none; }
+        /* Slave-bridge status — top-centre, above the LVGL "tap to wake" hint
+           on dim. Same 12px size kept on purpose; pointer-events:none so taps
+           on the canvas under it still register. */
+        #status { position: fixed; left: 50%; transform: translateX(-50%); top: 4px;
+                  color: #888; font: 12px/1.2 system-ui, sans-serif;
+                  pointer-events: none; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -42,13 +46,37 @@
     const setStatus = (s) => { statusEl.textContent = s; };
 
     // ─── Emscripten Module ───────────────────────────────────────────────────
+    // preRun: hold main() until we've fetched the master Toon's cached
+    // Buienradar radar GIF into MEMFS at /tmp/toonui_radar.gif, so the
+    // forecast screen's lv_gif_set_src("S:/tmp/toonui_radar.gif") finds it.
     var Module = {
         canvas: (function () { return document.getElementById('canvas'); })(),
         print:    (text) => console.log(text),
         printErr: (text) => console.warn(text),
+        preRun: [function () {
+            Module.addRunDependency('radar-gif');
+            fetch(MASTER + '/api/radar.gif')
+                .then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status))
+                .then(buf => {
+                    try { FS.mkdirTree('/tmp'); } catch (e) {}
+                    FS.writeFile('/tmp/toonui_radar.gif', new Uint8Array(buf));
+                    console.log('[radar] cached', buf.byteLength, 'bytes');
+                })
+                .catch(e => console.warn('[radar] fetch failed:', e))
+                .finally(() => Module.removeRunDependency('radar-gif'));
+        }],
         onRuntimeInitialized: () => {
             setStatus('ui ready');
             startSlaveBridge();
+            // Periodic radar refresh — overwrite the MEMFS file every 10 min so
+            // the next forecast-screen open shows a fresh radar loop. (LVGL
+            // caches the gif on set_src so the open screen keeps the old one
+            // until the user navigates back in.)
+            setInterval(function () {
+                fetch(MASTER + '/api/radar.gif')
+                    .then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status))
+                    .then(buf => FS.writeFile('/tmp/toonui_radar.gif', new Uint8Array(buf)));
+            }, 10 * 60 * 1000);
         }
     };
 

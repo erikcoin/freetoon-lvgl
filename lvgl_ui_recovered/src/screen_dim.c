@@ -859,13 +859,14 @@ lv_obj_t * screen_dim_create(void) {
         lv_obj_add_flag(dim_fc_temp[i], LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* "tap to wake" hint moved to the top-right corner so it doesn't fight
-       with the lowered forecast strip for the last 80 px of the screen. */
+    /* "tap to wake" hint at top-mid. Pushed down a bit (was SY(6)) so the
+       WASM client's "master: connected" status div (HTML overlay at top:4px)
+       sits cleanly above it instead of overlapping. */
     lv_obj_t * hint = lv_label_create(scr_root);
     lv_obj_set_style_text_color(hint, lv_color_hex(0x555555), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_18, 0);
     lv_label_set_text(hint, "tap to wake");
-    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, SY(6));
+    lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, SY(24));
 
     if (!refresh_timer) refresh_timer = lv_timer_create(refresh_cb, 1000, NULL);
     return scr_root;
