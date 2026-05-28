@@ -144,6 +144,9 @@ void settings_load(void) {
         else if (strcmp(k, "active_brightness") == 0) settings.active_brightness = iv;
         else if (strcmp(k, "dim_brightness")    == 0) settings.dim_brightness    = iv;
         else if (strcmp(k, "auto_brightness")   == 0) settings.auto_brightness   = iv;
+        else if (strcmp(k, "touch_swap_xy")     == 0) settings.touch_swap_xy     = iv;
+        else if (strcmp(k, "touch_invert_x")    == 0) settings.touch_invert_x    = iv;
+        else if (strcmp(k, "touch_invert_y")    == 0) settings.touch_invert_y    = iv;
         else if (strcmp(k, "temp_offset_centi") == 0) settings.temp_offset_centi = iv;
         else if (strcmp(k, "show_dim_weather")  == 0) settings.show_dim_weather  = iv;
         else if (strcmp(k, "show_dim_waste")    == 0) settings.show_dim_waste    = iv;
@@ -390,6 +393,9 @@ void settings_save(void) {
     fprintf(f, "active_brightness=%d\n", settings.active_brightness);
     fprintf(f, "dim_brightness=%d\n",    settings.dim_brightness);
     fprintf(f, "auto_brightness=%d\n",   settings.auto_brightness);
+    fprintf(f, "touch_swap_xy=%d\n",     settings.touch_swap_xy);
+    fprintf(f, "touch_invert_x=%d\n",    settings.touch_invert_x);
+    fprintf(f, "touch_invert_y=%d\n",    settings.touch_invert_y);
     fprintf(f, "temp_offset_centi=%d\n", settings.temp_offset_centi);
     fprintf(f, "show_dim_weather=%d\n",  settings.show_dim_weather);
     fprintf(f, "show_dim_waste=%d\n",    settings.show_dim_waste);

@@ -178,11 +178,21 @@ int bootpick_run(void) {
         return bp_default_choice;
     }
 
-    evdev_init();
     static lv_indev_drv_t indev_drv;
     lv_indev_drv_init(&indev_drv);
     indev_drv.type    = LV_INDEV_TYPE_POINTER;
+#ifdef TOON1
+    /* Same Toon-1-specific touch path the main UI uses (TSC2007 at
+     * /dev/input/event0, scaled). LVGL's stock evdev_init/read look at
+     * event1 + pass raw ADC values, so the picker was untappable too. */
+    extern int  toon1_touch_init(void);
+    extern void toon1_touch_read(lv_indev_drv_t *, lv_indev_data_t *);
+    toon1_touch_init();
+    indev_drv.read_cb = toon1_touch_read;
+#else
+    evdev_init();
     indev_drv.read_cb = evdev_read;
+#endif
     lv_indev_drv_register(&indev_drv);
 
     lv_obj_t * scr = lv_scr_act();

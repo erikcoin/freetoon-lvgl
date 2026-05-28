@@ -9,6 +9,14 @@ typedef struct {
     int active_brightness;    /* 0..1000 backlight when active */
     int dim_brightness;       /* 0..1000 backlight while dimmed */
     int auto_brightness;      /* 0/1 — follow the LTR-303 ambient sensor (Toon 2) */
+
+    /* Toon 1 TSC2007 touch panel alignment. Resistive panels are mounted any-
+     * which-way; these three booleans cover all 8 orientations. Tweak in
+     * /mnt/data/toonui.cfg and restart toonui. Ignored on Toon 2 (eGalax cap
+     * touch is already pixel-aligned). */
+    int touch_swap_xy;        /* 0/1 — swap the X and Y axes (90/270° rotation) */
+    int touch_invert_x;       /* 0/1 — mirror horizontally */
+    int touch_invert_y;       /* 0/1 — mirror vertically */
     int temp_offset_centi;    /* -500..+500 — added to displayed indoor temp,
                                  in centi-degrees (e.g. -120 = subtract 1.2°C) */
     int show_dim_weather;     /* 0/1 — show today's weather icon on the dim screen */

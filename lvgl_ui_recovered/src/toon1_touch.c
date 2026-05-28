@@ -19,6 +19,7 @@
 
 #include "toon1_touch.h"
 #include "display.h"
+#include "settings.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -98,9 +99,35 @@ void toon1_touch_read(lv_indev_drv_t * drv, lv_indev_data_t * data) {
         }
         /* EV_SYN frames the report; values accumulate into g_x/g_y/g_pressed. */
     }
-    data->point.x = g_x;
-    data->point.y = g_y;
+    /* Apply user-configured axis transforms. Resistive panels are mounted
+     * any-which-way; three booleans cover all 8 orientations. Tweak in
+     * /mnt/data/toonui.cfg without rebuilding. */
+    int out_x = g_x, out_y = g_y;
+    if (settings.touch_swap_xy) {
+        /* Swap after scaling — but X was scaled to DISP_HOR, Y to DISP_VER.
+         * After swap we need to re-scale the swapped value into the right
+         * axis range so it fits the screen. */
+        long sx = (long)g_y * DISP_HOR / DISP_VER;
+        long sy = (long)g_x * DISP_VER / DISP_HOR;
+        out_x = (int)sx;
+        out_y = (int)sy;
+    }
+    if (settings.touch_invert_x) out_x = DISP_HOR - 1 - out_x;
+    if (settings.touch_invert_y) out_y = DISP_VER - 1 - out_y;
+
+    data->point.x = out_x;
+    data->point.y = out_y;
     data->state   = g_pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+
+    /* Log press/release edges so the customer can `tail -f` toonui.log to see
+     * where taps actually register. Cheap (only on edges), helpful for
+     * dialling in the axis transforms. */
+    if (g_pressed != prev_pressed) {
+        fprintf(stderr, "[toon1_touch] %s at (%d,%d)%s\n",
+                g_pressed ? "PRESS" : "release", out_x, out_y,
+                (settings.touch_swap_xy || settings.touch_invert_x ||
+                 settings.touch_invert_y) ? " (transformed)" : "");
+    }
     if (g_pressed && !prev_pressed) ui_mark_activity();
 }
 
