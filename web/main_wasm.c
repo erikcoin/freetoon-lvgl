@@ -67,22 +67,130 @@ static void wasm_pointer_read(lv_indev_drv_t * drv, lv_indev_data_t * data) {
     data->state   = g_pt.pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
+/* ---- keyboard indev (laptop typing into LVGL textareas) ----
+ * Tiny ring of pending key/char events filled by pump_sdl_events from SDL
+ * keyboard events; lv_indev's read_cb drains one per poll. Maps SDL key
+ * symbols to LVGL key codes for the navigation keys (Tab, arrows,
+ * Backspace, Enter); plain text (letters, digits, punctuation) arrives
+ * via SDL_TEXTINPUT and we forward each code-point's byte sequence as
+ * raw LV_KEY characters — LVGL's textarea consumes them via
+ * lv_textarea_add_char on a per-byte basis. */
+typedef struct { uint32_t key; uint8_t state; } kb_ev_t;
+static kb_ev_t g_kb_q[64];
+static int     g_kb_head = 0, g_kb_tail = 0;
+
+static void kb_push(uint32_t key, uint8_t state) {
+    int next = (g_kb_head + 1) % (int)(sizeof g_kb_q / sizeof g_kb_q[0]);
+    if (next == g_kb_tail) return;          /* full — drop oldest */
+    g_kb_q[g_kb_head].key   = key;
+    g_kb_q[g_kb_head].state = state;
+    g_kb_head = next;
+}
+
+static void wasm_kb_read(lv_indev_drv_t * drv, lv_indev_data_t * data) {
+    (void)drv;
+    if (g_kb_head == g_kb_tail) { data->state = LV_INDEV_STATE_RELEASED; return; }
+    data->key   = g_kb_q[g_kb_tail].key;
+    data->state = g_kb_q[g_kb_tail].state;
+    g_kb_tail = (g_kb_tail + 1) % (int)(sizeof g_kb_q / sizeof g_kb_q[0]);
+    /* If more events are queued, hint LVGL to call us again next tick. */
+    data->continue_reading = (g_kb_head != g_kb_tail);
+}
+
+/* Walk up from `obj` to find the first scrollable ancestor — used by the
+ * mouse-wheel handler so the scroll lands on whatever section the cursor
+ * is over, not just on the screen root. */
+static lv_obj_t * find_scrollable(lv_obj_t * obj) {
+    while (obj) {
+        if (lv_obj_has_flag(obj, LV_OBJ_FLAG_SCROLLABLE)) return obj;
+        obj = lv_obj_get_parent(obj);
+    }
+    return NULL;
+}
+
 static void pump_sdl_events(void) {
     SDL_Event e;
+    int touched = 0;          /* any input event → mark UI activity (resets dim) */
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
-        case SDL_MOUSEBUTTONDOWN: g_pt.pressed = 1; g_pt.x = e.button.x; g_pt.y = e.button.y; break;
-        case SDL_MOUSEBUTTONUP:   g_pt.pressed = 0; break;
-        case SDL_MOUSEMOTION:     g_pt.x = e.motion.x; g_pt.y = e.motion.y; break;
+        case SDL_MOUSEBUTTONDOWN: {
+            g_pt.pressed = 1; g_pt.x = e.button.x; g_pt.y = e.button.y; touched = 1;
+            /* If the click landed on a textarea, add it to the default
+             * keyboard group + focus so subsequent SDL_TEXTINPUT bytes
+             * land in the right widget. Without this the keypad indev
+             * has nothing focused and laptop keystrokes vanish. */
+            lv_obj_t * hit = lv_indev_search_obj(lv_scr_act(),
+                &(lv_point_t){g_pt.x, g_pt.y});
+            if (hit && lv_obj_check_type(hit, &lv_textarea_class)) {
+                lv_group_t * grp = lv_group_get_default();
+                if (grp) {
+                    if (lv_obj_get_group(hit) != grp) lv_group_add_obj(grp, hit);
+                    lv_group_focus_obj(hit);
+                }
+            }
+            break;
+        }
+        case SDL_MOUSEBUTTONUP:   g_pt.pressed = 0; touched = 1; break;
+        case SDL_MOUSEMOTION:     g_pt.x = e.motion.x; g_pt.y = e.motion.y; touched = 1; break;
         case SDL_FINGERDOWN:      g_pt.pressed = 1;
                                   g_pt.x = (int)(e.tfinger.x * LV_HOR_RES);
-                                  g_pt.y = (int)(e.tfinger.y * LV_VER_RES); break;
-        case SDL_FINGERUP:        g_pt.pressed = 0; break;
+                                  g_pt.y = (int)(e.tfinger.y * LV_VER_RES); touched = 1; break;
+        case SDL_FINGERUP:        g_pt.pressed = 0; touched = 1; break;
         case SDL_FINGERMOTION:    g_pt.x = (int)(e.tfinger.x * LV_HOR_RES);
-                                  g_pt.y = (int)(e.tfinger.y * LV_VER_RES); break;
+                                  g_pt.y = (int)(e.tfinger.y * LV_VER_RES); touched = 1; break;
+        case SDL_MOUSEWHEEL: {
+            /* SDL gives wheel.y > 0 when the user scrolled UP (away from
+             * them). LVGL's lv_obj_scroll_by(obj, 0, +N) shifts the scroll
+             * offset DOWN by N pixels, which reveals content above —
+             * the natural "scroll-up reveals top" mapping. Pre-fix the
+             * canvas had no MOUSEWHEEL handler at all and the browser's
+             * default action either did nothing or flipped depending on
+             * OS "natural scrolling" — explicit handling here makes it
+             * consistent. */
+            lv_obj_t * hit = lv_indev_search_obj(lv_scr_act(),
+                &(lv_point_t){g_pt.x, g_pt.y});
+            lv_obj_t * tgt = find_scrollable(hit);
+            if (!tgt) tgt = lv_scr_act();
+            lv_obj_scroll_by(tgt, 0, e.wheel.y * 40, LV_ANIM_OFF);
+            touched = 1;
+            break;
+        }
+        case SDL_KEYDOWN: {
+            uint32_t k = 0;
+            switch (e.key.keysym.sym) {
+            case SDLK_BACKSPACE: k = LV_KEY_BACKSPACE; break;
+            case SDLK_RETURN:
+            case SDLK_KP_ENTER:  k = LV_KEY_ENTER;     break;
+            case SDLK_TAB:       k = (e.key.keysym.mod & KMOD_SHIFT)
+                                     ? LV_KEY_PREV : LV_KEY_NEXT; break;
+            case SDLK_UP:        k = LV_KEY_UP;    break;
+            case SDLK_DOWN:      k = LV_KEY_DOWN;  break;
+            case SDLK_LEFT:      k = LV_KEY_LEFT;  break;
+            case SDLK_RIGHT:     k = LV_KEY_RIGHT; break;
+            case SDLK_DELETE:    k = LV_KEY_DEL;   break;
+            case SDLK_HOME:      k = LV_KEY_HOME;  break;
+            case SDLK_END:       k = LV_KEY_END;   break;
+            case SDLK_ESCAPE:    k = LV_KEY_ESC;   break;
+            default: break;     /* printable chars come via SDL_TEXTINPUT */
+            }
+            if (k) { kb_push(k, LV_INDEV_STATE_PRESSED);
+                     kb_push(k, LV_INDEV_STATE_RELEASED); }
+            touched = 1;
+            break;
+        }
+        case SDL_TEXTINPUT:
+            /* SDL_TEXTINPUT delivers a UTF-8 string for the typed code-
+             * point(s); LVGL textareas accept one byte per indev poll. */
+            for (const char * p = e.text.text; *p; p++) {
+                kb_push((uint8_t)*p, LV_INDEV_STATE_PRESSED);
+                kb_push((uint8_t)*p, LV_INDEV_STATE_RELEASED);
+            }
+            touched = 1;
+            break;
         default: break;
         }
     }
+    if (touched) ui_mark_activity();   /* resets the auto-dim/auto-home timers */
 }
 
 /* ---- placeholder data so the UI renders without integrations -------------- */
@@ -106,6 +214,16 @@ void wasm_push_state(const char * json) {
     if (!json || *json != '{') return;
     client_link_apply_state(json);
 }
+
+/* Schedule a browser navigation after a short delay (ms) — used by the
+ * on_pwa_reset_click handler in screen_settings.c so the user gets visible
+ * confirmation that their Reset tap took effect (the cleared password
+ * itself only matters at the next auth-gate check). Delaying lets the
+ * pending /api/settings POST flush before the page reloads. */
+EM_JS(void, wasm_redirect_after, (const char * url, int ms), {
+    var u = UTF8ToString(url);
+    setTimeout(function(){ window.location = u; }, ms);
+});
 
 /* Optional reverse direction: LVGL on-tap → wasm_push_event → window.ftPost
  * (defined in shell.html) → fetch POST to the master. Not wired into any
@@ -176,6 +294,19 @@ int main(int argc, char * argv[]) {
     indev_drv.type    = LV_INDEV_TYPE_POINTER;
     indev_drv.read_cb = wasm_pointer_read;
     lv_indev_drv_register(&indev_drv);
+
+    /* Keyboard indev — drains the kb_push queue. Attached to a default
+     * group so any focused textarea (Settings → Web Access, PIN, MQTT,
+     * etc.) receives keystrokes when the user types on their laptop. */
+    static lv_indev_drv_t kb_drv;
+    lv_indev_drv_init(&kb_drv);
+    kb_drv.type    = LV_INDEV_TYPE_KEYPAD;
+    kb_drv.read_cb = wasm_kb_read;
+    lv_indev_t * kb_indev = lv_indev_drv_register(&kb_drv);
+    lv_group_t * g = lv_group_create();
+    lv_group_set_default(g);
+    lv_indev_set_group(kb_indev, g);
+    SDL_StartTextInput();      /* emit SDL_TEXTINPUT for printable keys */
 
     settings_load();
     /* Force the integration "gates" on for the slave — these are normally OFF

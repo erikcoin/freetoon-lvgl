@@ -1267,6 +1267,16 @@ static int handle_settings_post(int fd, const char * body) {
     if (extract_int(body, "update_check_enabled", &iv))settings.update_check_enabled = !!iv;
     if (extract_int(body, "update_channel", &iv))      settings.update_channel = !!iv;
     if (extract_int(body, "mqtt_enabled", &iv))       settings.mqtt_enabled = !!iv;
+    /* WASM slave Settings posts these via settings_save() → fetch /api/settings;
+     * accepting them here keeps the slave UI in sync with the master cfg. */
+    if (extract_int(body, "pwa_login_enabled", &iv))  settings.pwa_login_enabled = !!iv;
+    if (extract_str(body, "pwa_login_user", sv, sizeof sv))
+        snprintf(settings.pwa_login_user, sizeof settings.pwa_login_user, "%s", sv);
+    if (extract_str(body, "pwa_login_pass", sv, sizeof sv))
+        snprintf(settings.pwa_login_pass, sizeof settings.pwa_login_pass, "%s", sv);
+    if (extract_int(body, "pin_enabled", &iv))        settings.pin_enabled = !!iv;
+    if (extract_str(body, "pin_code", sv, sizeof sv))
+        snprintf(settings.pin_code, sizeof settings.pin_code, "%s", sv);
     /* City name is authoritative: when it changes, auto-resolve the Buienradar
      * location id (Open-Meteo geocoding). Only fall back to a manually-entered
      * id when the city is unchanged, so the id field still allows an override. */

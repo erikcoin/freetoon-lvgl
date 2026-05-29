@@ -29,11 +29,22 @@
         #status { position: fixed; left: 50%; transform: translateX(-50%); top: 4px;
                   color: #888; font: 12px/1.2 system-ui, sans-serif;
                   pointer-events: none; white-space: nowrap; }
+        /* Logout — small fixed top-right button. pointer-events:auto (the
+           parent #status above is the only "pointer-events:none" element)
+           so the tap reaches the link. Visible only when login is on; the
+           master's pwa_server handles the actual session teardown. */
+        #logout { position: fixed; top: 6px; right: 10px;
+                  color: #aaa; background: rgba(0,0,0,0.35);
+                  font: 12px/1.2 system-ui, sans-serif;
+                  text-decoration: none; padding: 4px 10px;
+                  border-radius: 12px; z-index: 10; }
+        #logout:hover { color: #fff; background: rgba(0,0,0,0.55); }
     </style>
 </head>
 <body>
     <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
     <div id="status">starting…</div>
+    <a id="logout" href="/logout" title="Sign out">⏻ logout</a>
 
     <script>
     // ─── slave-mode bridge config ────────────────────────────────────────────

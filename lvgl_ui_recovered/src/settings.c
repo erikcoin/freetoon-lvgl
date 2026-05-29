@@ -420,8 +420,76 @@ static void sanitize_all_strings(void) {
         settings_sanitize_str(fields[i]);
 }
 
+#ifdef WASM_BUILD
+#include <emscripten.h>
+/* Slave-mode persistence: each settings_save() in the browser PWA emits a
+ * single fetch POST of the changed-via-UI fields to the master Toon. The
+ * master's pwa_server handle_settings_post() merges them into its own
+ * settings_t and writes its local cfg, so a tap in the WASM Settings UI
+ * (Web Access, PIN, MQTT, weather, etc.) ends up persisted on the device
+ * the customer actually keeps. Without this, WASM Settings looked like it
+ * worked but every save was lost on reload — including the "Reset
+ * password" button which writes pwa_login_pass="". */
+EM_JS(void, wasm_post_settings_blob, (const char * json), {
+    fetch('/api/settings', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: UTF8ToString(json),
+        credentials: 'same-origin'
+    }).catch(e => console.warn('[settings_save] POST failed:', e));
+});
+
+/* JSON-escape a short string in place — handles the small chars
+ * (backslash, quote, control bytes <0x20) the cfg sanitiser already
+ * removes most of. Bounded copy; truncates rather than overflow. */
+static int json_esc(char * out, size_t outsz, const char * in) {
+    size_t w = 0;
+    for (const unsigned char * r = (const unsigned char *)(in ? in : ""); *r; r++) {
+        if (w + 6 >= outsz) break;
+        if (*r == '"' || *r == '\\') { out[w++] = '\\'; out[w++] = *r; }
+        else if (*r < 0x20)          { /* drop control chars */ continue; }
+        else                          out[w++] = (char)*r;
+    }
+    out[w] = 0;
+    return (int)w;
+}
+#endif
+
 void settings_save(void) {
     sanitize_all_strings();
+#ifdef WASM_BUILD
+    /* Build a JSON blob covering the fields the WASM UI can actually edit
+     * (anything wired via a textarea/toggle in screen_settings.c). The
+     * server applies just the keys it recognises, so adding more here is
+     * forward-compatible — unknown fields are ignored. */
+    char eu[64], ep[64], ec[16], ewl[96], emh[96], emu[64], emp[96];
+    json_esc(eu,  sizeof eu,  settings.pwa_login_user);
+    json_esc(ep,  sizeof ep,  settings.pwa_login_pass);
+    json_esc(ec,  sizeof ec,  settings.pin_code);
+    json_esc(ewl, sizeof ewl, settings.weather_location);
+    json_esc(emh, sizeof emh, settings.mqtt_host);
+    json_esc(emu, sizeof emu, settings.mqtt_user);
+    json_esc(emp, sizeof emp, settings.mqtt_pass);
+    char json[1024];
+    snprintf(json, sizeof json,
+        "{\"auto_dim_enabled\":%d,\"auto_dim_seconds\":%d,"
+        "\"auto_home_enabled\":%d,\"auto_home_seconds\":%d,"
+        "\"active_brightness\":%d,\"dim_brightness\":%d,"
+        "\"pwa_login_enabled\":%d,\"pwa_login_user\":\"%s\",\"pwa_login_pass\":\"%s\","
+        "\"pin_enabled\":%d,\"pin_code\":\"%s\","
+        "\"weather_location\":\"%s\",\"weather_location_id\":%d,"
+        "\"mqtt_enabled\":%d,\"mqtt_host\":\"%s\",\"mqtt_port\":%d,"
+        "\"mqtt_user\":\"%s\",\"mqtt_pass\":\"%s\"}",
+        settings.auto_dim_enabled, settings.auto_dim_seconds,
+        settings.auto_home_enabled, settings.auto_home_seconds,
+        settings.active_brightness, settings.dim_brightness,
+        settings.pwa_login_enabled, eu, ep,
+        settings.pin_enabled, ec,
+        ewl, settings.weather_location_id,
+        settings.mqtt_enabled, emh, settings.mqtt_port, emu, emp);
+    wasm_post_settings_blob(json);
+    return;     /* don't try to fopen(CFG_PATH, "w") — no /mnt/data in WASM */
+#endif
     FILE * f = fopen(CFG_PATH, "w");
     if (!f) return;
     fprintf(f, "auto_dim_enabled=%d\n",  settings.auto_dim_enabled);

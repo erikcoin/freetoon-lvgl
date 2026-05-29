@@ -2624,6 +2624,30 @@ static void on_pwa_apply_click(lv_event_t * e) {
              "%s", p ? p : "");
     settings_save();
 }
+/* One-tap "I forgot the web password" recovery — clear pwa_login_pass and
+ * persist, so the next browser visit hits /set-password and the user can
+ * mint a new one. Also clears the textarea so they don't see stale dots
+ * from the password-mode field. Username is left alone (you reset the
+ * password you forgot, not the username).
+ *
+ * In WASM build the user is sitting in a logged-in browser session — the
+ * cleared password only matters at the auth gate on the next visit, so
+ * nothing visibly changes without further action. Kick the session by
+ * navigating to /logout so the user immediately sees the set-password
+ * form: visible confirmation that the reset took effect. */
+static void on_pwa_reset_click(lv_event_t * e) {
+    (void)e;
+    settings.pwa_login_pass[0] = 0;
+    if (ta_pwa_pass) lv_textarea_set_text(ta_pwa_pass, "");
+    settings_save();
+#ifdef WASM_BUILD
+    /* Defer the navigation a tick so the POST in settings_save() has time
+     * to actually flush over the wire before the page reloads and tears
+     * down the fetch. 250 ms is well above the round-trip on a LAN. */
+    extern void wasm_redirect_after(const char * url, int ms);
+    wasm_redirect_after("/logout", 250);
+#endif
+}
 static void open_web_modal(lv_event_t * e) {
     (void)e;
     lv_obj_t * p = modal_open("Web Access", 420);
@@ -2666,15 +2690,27 @@ static void open_web_modal(lv_event_t * e) {
     lv_obj_t * la = lv_label_create(b_apply);
     lv_label_set_text(la, "Save"); lv_obj_center(la);
 
+    /* "Forgot password" / reset button — alongside Save. Clearing
+     * the field + Save does the same thing, but a dedicated button is
+     * faster to find when the password is genuinely lost. */
+    lv_obj_t * b_reset = lv_btn_create(p);
+    lv_obj_set_size(b_reset, 200, 50);
+    lv_obj_align(b_reset, LV_ALIGN_TOP_LEFT, 244, y);
+    lv_obj_set_style_bg_color(b_reset, lv_color_hex(0x444444), 0);
+    lv_obj_add_event_cb(b_reset, on_pwa_reset_click, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * lr = lv_label_create(b_reset);
+    lv_label_set_text(lr, "Reset password"); lv_obj_center(lr);
+
     /* Note label — explains the empty-password fallback so users aren't
      * surprised when clearing the field doesn't fully disable login. */
     lv_obj_t * note = lv_label_create(p);
     lv_obj_set_style_text_color(note, lv_color_hex(0x99aabb), 0);
     lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
     lv_label_set_text(note,
-        "Empty password = first visit will prompt to set one.\n"
+        "Empty password = next browser visit prompts to set one.\n"
+        "Reset password = same, in one tap (when you forgot it).\n"
         "Turn the toggle off to disable login entirely.");
-    lv_obj_align(note, LV_ALIGN_TOP_LEFT, 244, y + 10);
+    lv_obj_align(note, LV_ALIGN_TOP_LEFT, 4, y + 60);
 }
 
 static void on_pin_enabled_change(lv_event_t * e) {
