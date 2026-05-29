@@ -2127,7 +2127,12 @@ static void home_show_page(int n) {
 }
 static void on_page1_slot(lv_event_t * e) {
     (void)e;
-    screen_settings_open_tile_slots_modal();
+    /* If the crypto integration is installed, a tap opens its price-history
+     * graphs; otherwise fall back to the tile-assignment picker. */
+    if (tile_slots_integration_by_id("crypto"))
+        ui_push(screen_crypto_create());
+    else
+        screen_settings_open_tile_slots_modal();
 }
 void screen_home_reset_to_main(void) {
     if (home_tile_page != 0) home_show_page(0);

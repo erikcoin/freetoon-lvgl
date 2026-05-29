@@ -33,6 +33,7 @@ void screen_calendar_show(void);
 void screen_layout_editor_show(void);
 lv_obj_t * screen_layout_editor_create(void);
 lv_obj_t * screen_crypto_picker_create(void);   /* Settings -> Crypto coin live-search */
+lv_obj_t * screen_crypto_create(void);           /* crypto tile-tap -> price-history graphs */
 lv_obj_t * screen_forecast_create(void);
 lv_obj_t * screen_stats_create(void);
 lv_obj_t * screen_schedule_create(void);
