@@ -232,6 +232,35 @@ typedef struct {
      * control back to the master. The slave connects ONLY to master_host. */
     int  client_mode;
     char master_host[64];   /* master Toon IP/host, no scheme (PWA port 10081) */
+
+    /* PWA web-interface login (browser-facing).
+     *
+     * Enabled by default — a freshly-installed Toon shouldn't expose the full
+     * thermostat + curtain + schedule UI on the LAN with no gate. First visit
+     * after enable is redirected to /set-password to mint a password; until
+     * that's done the rest of the routes return 302 → /set-password (no
+     * silent "anyone in" window).
+     *
+     * pwa_login_pass is plaintext to match the rest of the cfg (mqtt_pass,
+     * vnc_pass). The threat model is "stop the neighbour or kid from poking
+     * the UI", not "an attacker reading /mnt/data/toonui.cfg" — root on the
+     * Toon already gives them everything. */
+    int  pwa_login_enabled;   /* 0/1 — gate the web UI behind login (default 1) */
+    char pwa_login_user[32];  /* default "admin" */
+    char pwa_login_pass[32];  /* default "" — empty forces /set-password */
+
+    /* On-device PIN — gates anything the user might tap by accident or that
+     * a household member shouldn't change unsupervised:
+     *  - Opening Settings (any setting change)
+     *  - Comfort/Home/Sleep/Away preset taps (home + dim screens)
+     *  - Temperature +/- setpoint adjustments
+     *  - Schedule mode toggle (auto ↔ manual)
+     *
+     * Default OFF — opt-in. When pin_enabled but pin_code is empty, the
+     * gate behaves as if disabled (no point asking for a PIN nobody set).
+     * Stored plaintext (UI PIN, not a security boundary). */
+    int  pin_enabled;
+    char pin_code[8];         /* 4-6 numeric chars; empty = effectively off */
 } settings_t;
 
 #define FORECAST_AUTO   0

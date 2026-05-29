@@ -1562,6 +1562,308 @@ static int handle_about_page(int fd) {
     return sock_send_all(fd, html, n);
 }
 
+/* ============================================================
+ *  PWA login: cookie-session auth
+ * ============================================================
+ *
+ * Default-enabled (settings.pwa_login_enabled). Two states:
+ *   1. pwa_login_pass is empty  → every route 302s to /set-password
+ *      until the user mints a password (form posts back to /set-password).
+ *   2. pwa_login_pass is set    → /login form gates everything; valid
+ *      submission mints a random session token, sent as an HttpOnly
+ *      cookie. Subsequent requests carry it; dispatch() verifies before
+ *      handing off to the normal route handlers.
+ *
+ * One session token in memory (the Toon is a single-user device — no
+ * point in a hash table). 24 h expiry. /logout clears it.
+ *
+ * Login body is application/x-www-form-urlencoded (so the login page
+ * works in any browser without JS), not the JSON the rest of the API
+ * uses. form_get below decodes it.
+ */
+#include <pthread.h>
+
+static pthread_mutex_t g_sess_mu = PTHREAD_MUTEX_INITIALIZER;
+static char  g_sess_token[33]    = "";       /* 32 hex chars + NUL, "" = no session */
+static time_t g_sess_expires     = 0;
+
+#define SESS_TTL_SECONDS (24 * 3600)
+#define SESS_COOKIE_NAME "ft_sess"
+
+/* URL-decode a single byte sequence in-place (length adjusts). */
+static int hexv(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+static void url_decode(char * s) {
+    char * w = s;
+    for (char * r = s; *r; ) {
+        if (*r == '+')      { *w++ = ' '; r++; }
+        else if (*r == '%' && r[1] && r[2]) {
+            int a = hexv(r[1]), b = hexv(r[2]);
+            if (a >= 0 && b >= 0) { *w++ = (char)((a << 4) | b); r += 3; }
+            else                  { *w++ = *r++; }
+        } else *w++ = *r++;
+    }
+    *w = 0;
+}
+
+/* Form-encoded key extraction (a=1&b=hello%20world). out is URL-decoded. */
+static int form_get(const char * body, const char * key, char * out, size_t outsz) {
+    if (!body || !*body) return 0;
+    size_t klen = strlen(key);
+    const char * p = body;
+    while (p && *p) {
+        const char * eq = strchr(p, '=');
+        const char * amp = strchr(p, '&');
+        if (!eq || (amp && eq > amp)) {
+            p = amp ? amp + 1 : NULL; continue;
+        }
+        if ((size_t)(eq - p) == klen && strncmp(p, key, klen) == 0) {
+            const char * vstart = eq + 1;
+            const char * vend   = amp ? amp : vstart + strlen(vstart);
+            size_t L = (size_t)(vend - vstart);
+            if (L > outsz - 1) L = outsz - 1;
+            memcpy(out, vstart, L); out[L] = 0;
+            url_decode(out);
+            return 1;
+        }
+        p = amp ? amp + 1 : NULL;
+    }
+    return 0;
+}
+
+/* Cookie header parser — find SESS_COOKIE_NAME=<value> in a Cookie line.
+ * The whole request (`req`) is passed; we look for the Cookie: header. */
+static int extract_cookie(const char * req, const char * name,
+                          char * out, size_t outsz) {
+    const char * h = strcasestr(req, "\nCookie:");
+    if (!h) return 0;
+    h += 8;  /* past "\nCookie:" */
+    /* The Cookie line continues until CRLF. Scan name=value pairs. */
+    const char * eol = strchr(h, '\n');
+    size_t llen = eol ? (size_t)(eol - h) : strlen(h);
+    size_t nlen = strlen(name);
+    for (size_t i = 0; i < llen; ) {
+        while (i < llen && (h[i] == ' ' || h[i] == ';')) i++;
+        if (i + nlen + 1 > llen) break;
+        if (strncmp(h + i, name, nlen) == 0 && h[i + nlen] == '=') {
+            size_t j = i + nlen + 1, k = j;
+            while (k < llen && h[k] != ';' && h[k] != '\r') k++;
+            size_t L = k - j; if (L > outsz - 1) L = outsz - 1;
+            memcpy(out, h + j, L); out[L] = 0;
+            return 1;
+        }
+        while (i < llen && h[i] != ';') i++;
+    }
+    return 0;
+}
+
+/* Cryptographically-ish-random 32 hex chars from /dev/urandom (good enough
+ * for a single-device session token; we're not minting JWTs). */
+static void mint_session_token(char out[33]) {
+    unsigned char buf[16];
+    FILE * f = fopen("/dev/urandom", "rb");
+    if (f) { (void)fread(buf, 1, sizeof buf, f); fclose(f); }
+    else { for (int i = 0; i < 16; i++) buf[i] = (unsigned char)(rand() & 0xff); }
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 16; i++) {
+        out[i*2]   = hex[(buf[i] >> 4) & 0xf];
+        out[i*2+1] = hex[ buf[i]       & 0xf];
+    }
+    out[32] = 0;
+}
+
+/* True if the request carries a valid, unexpired session cookie. */
+static int request_is_authed(const char * req) {
+    char tok[33] = "";
+    if (!extract_cookie(req, SESS_COOKIE_NAME, tok, sizeof tok)) return 0;
+    int ok;
+    pthread_mutex_lock(&g_sess_mu);
+    ok = (g_sess_token[0] && strcmp(tok, g_sess_token) == 0
+          && time(NULL) < g_sess_expires);
+    pthread_mutex_unlock(&g_sess_mu);
+    return ok;
+}
+
+/* Per-path allowlist — these routes never require auth (the login form
+ * itself, the set-password form, and the PWA shell bits that browsers
+ * fetch alongside a login page). */
+static int path_is_public(const char * path) {
+    if (!strcmp(path, "/login"))         return 1;
+    if (!strcmp(path, "/set-password"))  return 1;
+    if (!strcmp(path, "/logout"))        return 1;
+    if (!strcmp(path, "/manifest.json")) return 1;
+    if (!strcmp(path, "/sw.js"))         return 1;
+    if (!strcmp(path, "/icon-192.png"))  return 1;
+    return 0;
+}
+
+/* Send a 302 redirect with optional Set-Cookie. */
+static int send_redirect(int fd, const char * location, const char * set_cookie) {
+    char hdr[512];
+    int n = snprintf(hdr, sizeof hdr,
+        "HTTP/1.1 302 Found\r\n"
+        "Location: %s\r\n"
+        "%s%s%s"
+        "Content-Length: 0\r\n"
+        "Connection: close\r\n\r\n",
+        location,
+        set_cookie ? "Set-Cookie: " : "",
+        set_cookie ? set_cookie     : "",
+        set_cookie ? "\r\n"         : "");
+    return sock_send_all(fd, hdr, (size_t)n);
+}
+
+/* Tiny HTML page shell — title + body — for /login and /set-password. */
+static int send_html(int fd, int code, const char * status, const char * html) {
+    char hdr[160];
+    int hn = snprintf(hdr, sizeof hdr,
+        "HTTP/1.1 %d %s\r\nContent-Type: text/html; charset=utf-8\r\n"
+        "Content-Length: %zu\r\nConnection: close\r\n\r\n",
+        code, status, strlen(html));
+    if (sock_send_all(fd, hdr, (size_t)hn) < 0) return -1;
+    return sock_send_all(fd, html, strlen(html));
+}
+
+static const char * LOGIN_PAGE_FMT =
+    "<!doctype html><html><head><meta charset=utf-8>"
+    "<meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>freetoon login</title>"
+    "<style>body{font-family:system-ui,sans-serif;background:#181818;color:#eee;"
+    "display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}"
+    "form{background:#222;padding:24px;border-radius:8px;min-width:280px}"
+    "h1{margin:0 0 16px;font-size:20px}"
+    "label{display:block;margin:12px 0 4px;font-size:13px;color:#aaa}"
+    "input{width:100%%;padding:10px;border:1px solid #444;background:#111;color:#fff;"
+    "border-radius:4px;box-sizing:border-box;font-size:14px}"
+    "button{margin-top:16px;width:100%%;padding:12px;background:#3a8;color:#fff;"
+    "border:0;border-radius:4px;font-size:14px;cursor:pointer}"
+    "button:hover{background:#4b9}.err{color:#f77;margin-top:8px;font-size:13px}</style>"
+    "</head><body><form method=POST action=/login>"
+    "<h1>freetoon</h1>"
+    "<label>Username</label><input name=user autofocus value=\"%s\">"
+    "<label>Password</label><input name=pass type=password>"
+    "<button type=submit>Sign in</button>"
+    "%s"
+    "</form></body></html>";
+
+static int handle_login_get(int fd, int wrong) {
+    char html[2048];
+    snprintf(html, sizeof html, LOGIN_PAGE_FMT,
+             settings.pwa_login_user,
+             wrong ? "<div class=err>Wrong username or password.</div>" : "");
+    return send_html(fd, 200, "OK", html);
+}
+
+static int handle_login_post(int fd, const char * body) {
+    char user[32] = "", pass[32] = "";
+    form_get(body, "user", user, sizeof user);
+    form_get(body, "pass", pass, sizeof pass);
+    if (strcmp(user, settings.pwa_login_user) != 0 ||
+        strcmp(pass, settings.pwa_login_pass) != 0) {
+        return handle_login_get(fd, 1);
+    }
+    /* Auth OK — mint session, set cookie, redirect home. */
+    pthread_mutex_lock(&g_sess_mu);
+    mint_session_token(g_sess_token);
+    g_sess_expires = time(NULL) + SESS_TTL_SECONDS;
+    char tok[33]; memcpy(tok, g_sess_token, sizeof tok);
+    pthread_mutex_unlock(&g_sess_mu);
+    char cookie[128];
+    snprintf(cookie, sizeof cookie,
+             "%s=%s; Path=/; Max-Age=%d; HttpOnly; SameSite=Lax",
+             SESS_COOKIE_NAME, tok, SESS_TTL_SECONDS);
+    return send_redirect(fd, "/", cookie);
+}
+
+static int handle_logout(int fd) {
+    pthread_mutex_lock(&g_sess_mu);
+    g_sess_token[0] = 0;
+    g_sess_expires = 0;
+    pthread_mutex_unlock(&g_sess_mu);
+    char cookie[128];
+    snprintf(cookie, sizeof cookie,
+             "%s=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax", SESS_COOKIE_NAME);
+    return send_redirect(fd, "/login", cookie);
+}
+
+static const char * SETPASS_PAGE_FMT =
+    "<!doctype html><html><head><meta charset=utf-8>"
+    "<meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>freetoon — set password</title>"
+    "<style>body{font-family:system-ui,sans-serif;background:#181818;color:#eee;"
+    "display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}"
+    "form{background:#222;padding:24px;border-radius:8px;min-width:320px}"
+    "h1{margin:0 0 8px;font-size:20px}"
+    "p{margin:0 0 16px;color:#aaa;font-size:13px}"
+    "label{display:block;margin:12px 0 4px;font-size:13px;color:#aaa}"
+    "input{width:100%%;padding:10px;border:1px solid #444;background:#111;color:#fff;"
+    "border-radius:4px;box-sizing:border-box;font-size:14px}"
+    "button{margin-top:16px;width:100%%;padding:12px;background:#3a8;color:#fff;"
+    "border:0;border-radius:4px;font-size:14px;cursor:pointer}"
+    ".err{color:#f77;margin-top:8px;font-size:13px}</style>"
+    "</head><body><form method=POST action=/set-password>"
+    "<h1>Set a password</h1>"
+    "<p>Web access is enabled but no password is set yet. Choose one now to "
+    "continue. You can change it later in Settings &rarr; Web Access.</p>"
+    "<label>Username</label><input name=user value=\"%s\">"
+    "<label>Password (min 4 chars)</label><input name=pass type=password autofocus>"
+    "<label>Confirm</label><input name=pass2 type=password>"
+    "<button type=submit>Save &amp; sign in</button>"
+    "%s"
+    "</form></body></html>";
+
+static int handle_setpass_get(int fd, const char * err) {
+    char html[2048];
+    snprintf(html, sizeof html, SETPASS_PAGE_FMT,
+             settings.pwa_login_user[0] ? settings.pwa_login_user : "admin",
+             err ? err : "");
+    return send_html(fd, 200, "OK", html);
+}
+
+static int handle_setpass_post(int fd, const char * body) {
+    char user[32] = "", pass[32] = "", pass2[32] = "";
+    form_get(body, "user", user, sizeof user);
+    form_get(body, "pass", pass, sizeof pass);
+    form_get(body, "pass2", pass2, sizeof pass2);
+    if (!user[0]) snprintf(user, sizeof user, "admin");
+    if (strlen(pass) < 4)
+        return handle_setpass_get(fd, "<div class=err>Password must be at least 4 characters.</div>");
+    if (strcmp(pass, pass2) != 0)
+        return handle_setpass_get(fd, "<div class=err>Passwords don't match.</div>");
+    /* Persist + auto-login. */
+    snprintf(settings.pwa_login_user, sizeof settings.pwa_login_user, "%s", user);
+    snprintf(settings.pwa_login_pass, sizeof settings.pwa_login_pass, "%s", pass);
+    settings_save();
+    return handle_login_post(fd, body);
+}
+
+/* Returns 1 if dispatch may proceed with normal route handling, 0 if
+ * this function already wrote the response (auth gate fired). */
+static int auth_gate(int fd, const char * method, const char * path, const char * req) {
+    if (!settings.pwa_login_enabled) return 1;
+    if (path_is_public(path)) {
+        /* Even public paths need to dispatch to their handlers — but the
+         * login handlers live in dispatch() too, so we just return 1 and
+         * let the route table handle them. */
+        return 1;
+    }
+    /* If no password set, force the set-password flow. */
+    if (!settings.pwa_login_pass[0]) {
+        send_redirect(fd, "/set-password", NULL);
+        return 0;
+    }
+    if (!request_is_authed(req)) {
+        send_redirect(fd, "/login", NULL);
+        return 0;
+    }
+    (void)method;
+    return 1;
+}
+
 static int dispatch(int fd, char * req) {
     char method[8] = "", path[256] = "";
     if (sscanf(req, "%7s %255s", method, path) != 2) {
@@ -1569,6 +1871,25 @@ static int dispatch(int fd, char * req) {
     }
     char * body = strstr(req, "\r\n\r\n");
     if (body) body += 4; else body = "";
+
+    /* Auth gate — redirects to /login or /set-password and returns 0
+     * if the request shouldn't reach the normal route handlers.
+     * Login routes themselves are on the public allowlist so the user
+     * can actually see the form. */
+    if (!auth_gate(fd, method, path, req)) return 0;
+
+    /* Login / set-password / logout — explicit routes (even though they
+     * land here only for public-allowlisted paths, dispatch still needs
+     * to know which handler to invoke). */
+    if (!strcmp(method, "GET")) {
+        if (!strcmp(path, "/login"))         return handle_login_get(fd, 0);
+        if (!strcmp(path, "/set-password"))  return handle_setpass_get(fd, NULL);
+        if (!strcmp(path, "/logout"))        return handle_logout(fd);
+    }
+    if (!strcmp(method, "POST")) {
+        if (!strcmp(path, "/login"))         return handle_login_post(fd, body);
+        if (!strcmp(path, "/set-password"))  return handle_setpass_post(fd, body);
+    }
 
     if (!strcmp(method, "GET")) {
         if (!strcmp(path, "/api/state"))         return handle_state(fd);

@@ -26,6 +26,7 @@
 #include "tile_slots.h"
 #include "layout.h"
 #include "update_check.h"
+#include "pin_modal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -380,8 +381,13 @@ static void open_thermostat(lv_event_t * e) {
 }
 /* +/- on the tile: child clicks don't bubble to parent, so these
    don't navigate. They just adjust setpoint in place. */
-static void on_tile_sp_up(lv_event_t * e)   { (void)e; boxtalk_setpoint_increase(); }
-static void on_tile_sp_down(lv_event_t * e) { (void)e; boxtalk_setpoint_decrease(); }
+/* Wrapped via pin_gate so the +/- nudges prompt for the PIN when set.
+ * The inner *_apply callbacks do the actual BoxTalk call; pin_gate runs
+ * them directly when PIN is off and via the modal when it's on. */
+static void sp_up_apply(void * ctx)   { (void)ctx; boxtalk_setpoint_increase(); }
+static void sp_down_apply(void * ctx) { (void)ctx; boxtalk_setpoint_decrease(); }
+static void on_tile_sp_up(lv_event_t * e)   { (void)e; pin_gate(sp_up_apply,   NULL); }
+static void on_tile_sp_down(lv_event_t * e) { (void)e; pin_gate(sp_down_apply, NULL); }
 
 /* ---------- program-picker modal ---------- */
 typedef struct {
@@ -395,24 +401,38 @@ static void picker_close_cb(lv_event_t * e) {
     if (modal) lv_obj_del(modal);
 }
 
-static void picker_apply_cb(lv_event_t * e) {
-    picker_entry_t * pe = lv_event_get_user_data(e);
+/* Inner action — runs after pin_gate clears (or immediately when PIN
+ * is off). The modal is closed by picker_close_cb on the same tap event,
+ * so by the time pin_gate's modal opens picker_entries[].modal is the
+ * picker that we want to dismiss. We dismiss it before the BoxTalk call
+ * to keep the visible UI in sync. */
+static void picker_apply_action(void * ctx) {
+    picker_entry_t * pe = ctx;
     if (!pe) return;
+    if (pe->modal) { lv_obj_del(pe->modal); pe->modal = NULL; }
     if (pe->state_value < 0) boxtalk_set_manual();
     else                     boxtalk_set_program(pe->state_value);
-    if (pe->modal) lv_obj_del(pe->modal);
+}
+static void picker_apply_cb(lv_event_t * e) {
+    picker_entry_t * pe = lv_event_get_user_data(e);
+    pin_gate(picker_apply_action, pe);
 }
 
 /* Mode-toggle taps. Each button always sends the corresponding action;
  * re-tapping the active mode is a no-op the user can't get wrong. */
-static void on_mode_manual(lv_event_t * e)  { (void)e; boxtalk_set_manual();      }
-static void on_mode_program(lv_event_t * e) { (void)e; boxtalk_resume_schedule(); }
+static void mode_manual_apply(void * ctx)  { (void)ctx; boxtalk_set_manual();      }
+static void mode_program_apply(void * ctx) { (void)ctx; boxtalk_resume_schedule(); }
+static void on_mode_manual(lv_event_t * e)  { (void)e; pin_gate(mode_manual_apply,  NULL); }
+static void on_mode_program(lv_event_t * e) { (void)e; pin_gate(mode_program_apply, NULL); }
 
 /* Direct preset tap on one of the four pill-side buttons. user_data carries
  * the Toon program state (0=Comfort, 1=Home, 2=Sleep, 3=Away). */
+static void preset_apply(void * ctx) {
+    boxtalk_set_program((int)(intptr_t)ctx);
+}
 static void on_tile_preset(lv_event_t * e) {
     int s = (int)(intptr_t)lv_event_get_user_data(e);
-    boxtalk_set_program(s);
+    pin_gate(preset_apply, (void *)(intptr_t)s);
 }
 
 static void on_program_tap(lv_event_t * e) {
@@ -954,9 +974,13 @@ static void vent_apply_fan_anim(int rpm) {
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
     lv_anim_start(&a);
 }
+static void open_settings_action(void * ctx) {
+    (void)ctx;
+    ui_push(screen_settings_create());
+}
 static void open_settings(lv_event_t * e) {
     (void)e;
-    ui_push(screen_settings_create());
+    pin_gate(open_settings_action, NULL);
 }
 static void open_stats(lv_event_t * e) {
     (void)e;

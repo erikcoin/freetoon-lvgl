@@ -100,6 +100,16 @@ settings_t settings = {
     .update_check_enabled = 1,
     .update_channel       = 1,   /* beta/dev by default */
     .energy_source       = 0,   /* meteradapter (official) by default */
+
+    /* Web login on by default; password starts empty → first visit to /
+     * 302s to /set-password to force the user to mint one. */
+    .pwa_login_enabled   = 1,
+    .pwa_login_user      = "admin",
+    .pwa_login_pass      = "",
+
+    /* PIN off by default. */
+    .pin_enabled         = 0,
+    .pin_code            = "",
 };
 
 float display_indoor_temp(float raw) {
@@ -282,6 +292,14 @@ void settings_load(void) {
             snprintf(settings.tile_slot_vent, sizeof settings.tile_slot_vent, "%s", v);
         else if (strcmp(k, "tile_slot_water") == 0)
             snprintf(settings.tile_slot_water, sizeof settings.tile_slot_water, "%s", v);
+        else if (strcmp(k, "pwa_login_enabled") == 0) settings.pwa_login_enabled = iv;
+        else if (strcmp(k, "pwa_login_user")    == 0)
+            snprintf(settings.pwa_login_user, sizeof settings.pwa_login_user, "%s", v);
+        else if (strcmp(k, "pwa_login_pass")    == 0)
+            snprintf(settings.pwa_login_pass, sizeof settings.pwa_login_pass, "%s", v);
+        else if (strcmp(k, "pin_enabled")       == 0) settings.pin_enabled = iv;
+        else if (strcmp(k, "pin_code")          == 0)
+            snprintf(settings.pin_code, sizeof settings.pin_code, "%s", v);
     }
     fclose(f);
 
@@ -497,5 +515,10 @@ void settings_save(void) {
     if (settings.tile_slot_family[0]) fprintf(f, "tile_slot_family=%s\n", settings.tile_slot_family);
     if (settings.tile_slot_vent  [0]) fprintf(f, "tile_slot_vent=%s\n",   settings.tile_slot_vent);
     if (settings.tile_slot_water [0]) fprintf(f, "tile_slot_water=%s\n",  settings.tile_slot_water);
+    fprintf(f, "pwa_login_enabled=%d\n", settings.pwa_login_enabled);
+    fprintf(f, "pwa_login_user=%s\n",    settings.pwa_login_user);
+    fprintf(f, "pwa_login_pass=%s\n",    settings.pwa_login_pass);
+    fprintf(f, "pin_enabled=%d\n",       settings.pin_enabled);
+    fprintf(f, "pin_code=%s\n",          settings.pin_code);
     fclose(f);
 }

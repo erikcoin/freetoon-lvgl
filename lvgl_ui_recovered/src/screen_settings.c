@@ -2592,6 +2592,156 @@ static void make_tile(int x, int y, const lv_img_dsc_t * icon, const char * sym,
 }
 
 /* ===================================================================== */
+/* ===================================================================== */
+/* Web access modal: PWA login toggle + username + password + Apply       */
+/* PIN modal: on-device PIN toggle + 4-6 digit code + Apply               */
+/*                                                                        */
+/* Both follow the MQTT/Domoticz pattern — toggle commits immediately on  */
+/* state change; textarea values commit only on the Apply button (modal-  */
+/* close-without-apply discards them). Apply also calls settings_save()   */
+/* explicitly so partial commits stick even if the modal is reopened.    */
+/* ===================================================================== */
+static lv_obj_t * ta_pwa_user = NULL;
+static lv_obj_t * ta_pwa_pass = NULL;
+static lv_obj_t * ta_pin_code = NULL;
+
+static void on_pwa_enabled_change(lv_event_t * e) {
+    settings.pwa_login_enabled =
+        lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0;
+}
+static void on_pwa_apply_click(lv_event_t * e) {
+    (void)e;
+    const char * u = lv_textarea_get_text(ta_pwa_user);
+    const char * p = lv_textarea_get_text(ta_pwa_pass);
+    /* Empty user → fall back to "admin" rather than locking the user out
+     * (a blank username field would otherwise make login impossible). */
+    snprintf(settings.pwa_login_user, sizeof settings.pwa_login_user,
+             "%s", (u && *u) ? u : "admin");
+    /* Password may legitimately be empty — that flips the PWA into the
+     * /set-password forced-onboarding state, which is the right behaviour
+     * after the user clears the field. */
+    snprintf(settings.pwa_login_pass, sizeof settings.pwa_login_pass,
+             "%s", p ? p : "");
+    settings_save();
+}
+static void open_web_modal(lv_event_t * e) {
+    (void)e;
+    lv_obj_t * p = modal_open("Web Access", 420);
+    int y = 70;
+
+    lv_obj_t * r_en = panel_row(p, y, "Login required (browser)", NULL);
+    row_switch(r_en, settings.pwa_login_enabled, on_pwa_enabled_change);
+    y += 82;
+
+    lv_obj_t * lu = lv_label_create(p);
+    lv_obj_set_style_text_color(lu, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lu, &lv_font_montserrat_22, 0);
+    lv_label_set_text(lu, "Username:");
+    lv_obj_align(lu, LV_ALIGN_TOP_LEFT, 4, y);
+    ta_pwa_user = lv_textarea_create(p);
+    lv_obj_set_size(ta_pwa_user, 420, 44);
+    lv_obj_align(ta_pwa_user, LV_ALIGN_TOP_LEFT, 260, y - 4);
+    lv_textarea_set_one_line(ta_pwa_user, true);
+    lv_textarea_set_text(ta_pwa_user, settings.pwa_login_user);
+    y += 60;
+
+    lv_obj_t * lp = lv_label_create(p);
+    lv_obj_set_style_text_color(lp, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lp, &lv_font_montserrat_22, 0);
+    lv_label_set_text(lp, "Password:");
+    lv_obj_align(lp, LV_ALIGN_TOP_LEFT, 4, y);
+    ta_pwa_pass = lv_textarea_create(p);
+    lv_obj_set_size(ta_pwa_pass, 420, 44);
+    lv_obj_align(ta_pwa_pass, LV_ALIGN_TOP_LEFT, 260, y - 4);
+    lv_textarea_set_one_line(ta_pwa_pass, true);
+    lv_textarea_set_password_mode(ta_pwa_pass, true);
+    lv_textarea_set_text(ta_pwa_pass, settings.pwa_login_pass);
+    y += 64;
+
+    lv_obj_t * b_apply = lv_btn_create(p);
+    lv_obj_set_size(b_apply, 220, 50);
+    lv_obj_align(b_apply, LV_ALIGN_TOP_LEFT, 4, y);
+    lv_obj_set_style_bg_color(b_apply, lv_color_hex(0xc06030), 0);
+    lv_obj_add_event_cb(b_apply, on_pwa_apply_click, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * la = lv_label_create(b_apply);
+    lv_label_set_text(la, "Save"); lv_obj_center(la);
+
+    /* Note label — explains the empty-password fallback so users aren't
+     * surprised when clearing the field doesn't fully disable login. */
+    lv_obj_t * note = lv_label_create(p);
+    lv_obj_set_style_text_color(note, lv_color_hex(0x99aabb), 0);
+    lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
+    lv_label_set_text(note,
+        "Empty password = first visit will prompt to set one.\n"
+        "Turn the toggle off to disable login entirely.");
+    lv_obj_align(note, LV_ALIGN_TOP_LEFT, 244, y + 10);
+}
+
+static void on_pin_enabled_change(lv_event_t * e) {
+    settings.pin_enabled =
+        lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED) ? 1 : 0;
+}
+static void on_pin_apply_click(lv_event_t * e) {
+    (void)e;
+    const char * v = lv_textarea_get_text(ta_pin_code);
+    /* Empty code = effectively off (matches pin_is_armed()'s check) — no
+     * point treating that as an error. Otherwise enforce digits-only +
+     * 4-6 chars to keep the modal numpad consistent. */
+    if (v && *v) {
+        size_t L = strlen(v);
+        int bad = 0;
+        for (size_t i = 0; i < L; i++) if (v[i] < '0' || v[i] > '9') { bad = 1; break; }
+        if (bad || L < 4 || L > 6) {
+            /* Just ignore — UI shouldn't allow this anyway via ta_make_numeric */
+            return;
+        }
+    }
+    snprintf(settings.pin_code, sizeof settings.pin_code, "%s", v ? v : "");
+    settings_save();
+}
+static void open_pin_settings_modal(lv_event_t * e) {
+    (void)e;
+    lv_obj_t * p = modal_open("PIN code", 380);
+    int y = 70;
+
+    lv_obj_t * r_en = panel_row(p, y, "PIN required for changes", NULL);
+    row_switch(r_en, settings.pin_enabled, on_pin_enabled_change);
+    y += 82;
+
+    lv_obj_t * lp = lv_label_create(p);
+    lv_obj_set_style_text_color(lp, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lp, &lv_font_montserrat_22, 0);
+    lv_label_set_text(lp, "PIN (4-6 digits):");
+    lv_obj_align(lp, LV_ALIGN_TOP_LEFT, 4, y);
+    ta_pin_code = lv_textarea_create(p); ta_make_numeric(ta_pin_code);
+    lv_obj_set_size(ta_pin_code, 260, 44);
+    lv_obj_align(ta_pin_code, LV_ALIGN_TOP_LEFT, 260, y - 4);
+    lv_textarea_set_one_line(ta_pin_code, true);
+    lv_textarea_set_password_mode(ta_pin_code, true);
+    lv_textarea_set_max_length(ta_pin_code, sizeof settings.pin_code - 1);
+    lv_textarea_set_text(ta_pin_code, settings.pin_code);
+    y += 64;
+
+    lv_obj_t * b_apply = lv_btn_create(p);
+    lv_obj_set_size(b_apply, 220, 50);
+    lv_obj_align(b_apply, LV_ALIGN_TOP_LEFT, 4, y);
+    lv_obj_set_style_bg_color(b_apply, lv_color_hex(0xc06030), 0);
+    lv_obj_add_event_cb(b_apply, on_pin_apply_click, LV_EVENT_CLICKED, NULL);
+    lv_obj_t * la = lv_label_create(b_apply);
+    lv_label_set_text(la, "Save"); lv_obj_center(la);
+
+    lv_obj_t * note = lv_label_create(p);
+    lv_obj_set_style_text_color(note, lv_color_hex(0x99aabb), 0);
+    lv_obj_set_style_text_font(note, &lv_font_montserrat_14, 0);
+    lv_label_set_text(note,
+        "When enabled, the PIN gates: opening Settings,\n"
+        "thermostat presets (Comfort/Home/Sleep/Away),\n"
+        "+/- setpoint nudges, and schedule/manual toggle.\n"
+        "Empty PIN = gate stays open even if toggle is on.");
+    lv_obj_align(note, LV_ALIGN_TOP_LEFT, 4, y + 64);
+}
+
+/* ===================================================================== */
 /* MQTT modal: broker creds + Test + Discover + topic-checklist + Apply  */
 /* ===================================================================== */
 #include "mqtt_client.h"
@@ -3016,6 +3166,10 @@ lv_obj_t * screen_settings_create(void) {
               "tile layout editor", open_layout_editor); n++;
     make_tile(GX(n), GY(n), NULL, LV_SYMBOL_REFRESH, "Restart UI",
               "reload settings", open_restart_confirm); n++;
+    make_tile(GX(n), GY(n), NULL, LV_SYMBOL_WIFI, "Web Access",
+              "browser login", open_web_modal); n++;
+    make_tile(GX(n), GY(n), NULL, LV_SYMBOL_OK, "PIN code",
+              "lock changes", open_pin_settings_modal); n++;
     #undef GX
     #undef GY
 

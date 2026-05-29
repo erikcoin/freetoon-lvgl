@@ -8,6 +8,7 @@
 #include "homewizard.h"
 #include "icons.h"
 #include "settings.h"
+#include "pin_modal.h"
 #include <stdio.h>
 #include <time.h>
 
@@ -45,16 +46,24 @@ static lv_obj_t * btn_prog[6] = {0};
 static const int  prog_state[6] = {-2, -1, 0, 1, 2, 3};
 
 static void on_open_advanced(lv_event_t * e) { (void)e; ui_push(screen_heater_advanced_create()); }
-static void on_setpoint_up(lv_event_t * e) { boxtalk_setpoint_increase(); }
-static void on_setpoint_down(lv_event_t * e) { boxtalk_setpoint_decrease(); }
+/* Gated via pin_modal: setpoint nudges, preset taps, and schedule/manual
+ * mode toggle all run through pin_gate so the PIN prompts when enabled. */
+static void sp_up_apply(void * c)   { (void)c; boxtalk_setpoint_increase(); }
+static void sp_down_apply(void * c) { (void)c; boxtalk_setpoint_decrease(); }
+static void on_setpoint_up(lv_event_t * e)   { (void)e; pin_gate(sp_up_apply,   NULL); }
+static void on_setpoint_down(lv_event_t * e) { (void)e; pin_gate(sp_down_apply, NULL); }
 static void on_back(lv_event_t * e) { ui_pop(); }
 static void on_open_schedule(lv_event_t * e) { (void)e; ui_push(screen_schedule_create()); }
-static void on_program_tap(lv_event_t * e) {
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    int s = prog_state[idx];
+static void program_tap_apply(void * ctx) {
+    int s = (int)(intptr_t)ctx;
     if      (s == -2) boxtalk_resume_schedule();
     else if (s == -1) boxtalk_set_manual();
     else              boxtalk_set_program(s);
+}
+static void on_program_tap(lv_event_t * e) {
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    int s = prog_state[idx];
+    pin_gate(program_tap_apply, (void *)(intptr_t)s);
 }
 
 static void refresh_cb(lv_timer_t * t) {
