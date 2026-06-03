@@ -19,8 +19,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#define BP_HOR 1024
-#define BP_VER 600
+#define BP_HOR DISP_HOR
+#define BP_VER DISP_VER
 #define BP_DRAW_LINES 100
 #define BP_COUNTDOWN_S 10
 
