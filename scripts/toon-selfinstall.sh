@@ -6,13 +6,13 @@
 # makes sure the inittab launch row is present, and restarts the UI.
 #
 # One-liner:
-#   curl -fsSL https://raw.githubusercontent.com/Ierlandfan/freetoon-lvgl/main/scripts/toon-selfinstall.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/erikcoin/freetoon-lvgl/main/scripts/toon-selfinstall.sh | sh
 #
 # Re-running is safe (idempotent): it only adds the inittab row if missing
 # and always backs up the current binary to /mnt/data/toonui.bak first.
 set -e
 
-REPO="Ierlandfan/freetoon-lvgl"
+REPO="erikcoin/freetoon-lvgl"
 DEST="/mnt/data"
 TMP="/tmp/freetoon.$$"
 mkdir -p "$TMP"
