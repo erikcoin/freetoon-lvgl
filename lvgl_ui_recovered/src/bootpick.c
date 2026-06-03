@@ -116,7 +116,7 @@ static void tick_countdown(lv_timer_t * t) {
                                  ? "freetoon"
                                  : "stock qt-gui";
         lv_label_set_text_fmt(bp_lbl_countdown,
-            "Booting %s in %d s — tap to choose",
+            "Boooting %s in %d s — tap to choose",
             which, bp_remaining_seconds);
     }
 }
