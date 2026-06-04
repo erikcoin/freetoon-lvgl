@@ -52,7 +52,7 @@ if [[ -z "$PWA_DIR" ]]; then
 fi
 
 SSH="sshpass -p $TOON_PASS ssh -o HostKeyAlgorithms=+ssh-rsa -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR $TOON_USER@$TOON_HOST"
-SCP="sshpass -p $TOON_PASS scp -o HostKeyAlgorithms=+ssh-rsa -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+SCP="sshpass -p $TOON_PASS scp -o HostKeyAlgorithms=+ssh-rsa -o LogLevel=ERROR"
 
 # `toon:` runs ui_launcher.sh — it shows the 10 s boot picker, then exec's
 # either toonui or /qmf/sbin/qt-gui based on /mnt/data/ui_choice. Keep the
