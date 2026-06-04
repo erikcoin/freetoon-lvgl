@@ -51,7 +51,7 @@ if [[ -z "$PWA_DIR" ]]; then
     : "${PWA_DIR:=$HERE/pwa_static}"   # fallback for error message
 fi
 
-SSH="sshpass -p $TOON_PASS ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR $TOON_USER@$TOON_HOST"
+SSH="sshpass -p $TOON_PASS ssh -o HostKeyAlgorithms=+ssh-rsa -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR $TOON_USER@$TOON_HOST"
 SCP="sshpass -p $TOON_PASS scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
 
 # `toon:` runs ui_launcher.sh — it shows the 10 s boot picker, then exec's
